@@ -1,0 +1,39 @@
+package main
+
+type User struct {
+	age int
+}
+
+func birthday(user *User) {
+	user.age++
+}
+
+func makeUser(age int) *User {
+	user := User{age: age}
+	return &user
+}
+
+func main() {
+	user := User{age: 30}
+	birthday(&user)
+	println("After birthday:", user.age)
+
+	copy := user
+	copy.age++
+	println("Value copy:", user.age, copy.age)
+
+	p := &user
+	q := p
+	q.age++
+	println("Aliased reference:", user.age, p.age, q.age)
+
+	older := makeUser(40)
+	birthday(older)
+	println("Returned reference:", older.age)
+
+	total := 0
+	for i := 0; i < 5; i++ {
+		total += i
+	}
+	println("Loop total:", total)
+}

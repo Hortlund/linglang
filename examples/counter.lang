@@ -1,0 +1,58 @@
+package main
+
+type CounterArgs struct { workers int }
+type WorkerArgs struct { counter Pid; increments int }
+type Command struct { kind int; amount int; reply Pid }
+type Snapshot struct { total int }
+
+// One process owns the mutable total. Each worker's Done follows its increments
+// in the same mailbox; there is no assumption about ordering between workers.
+func counter(args CounterArgs) {
+    total := 0
+    finished := 0
+    var reader Pid
+    for {
+        delivery := receive[Command](-1)
+        cmd := delivery.value
+        if cmd.kind == 1 { total += cmd.amount }
+        if cmd.kind == 2 { finished++ }
+        if cmd.kind == 3 { reader = cmd.reply }
+        if finished == args.workers && reader != nil {
+            send(reader, Snapshot{total: total})
+            return
+        }
+    }
+}
+
+func worker(args WorkerArgs) {
+    for i := 0; i < args.increments; i++ {
+        send(args.counter, Command{kind: 1, amount: 1})
+    }
+    send(args.counter, Command{kind: 2})
+}
+
+func awaitNormal(process Process) {
+    result := wait(process.monitor, 5000)
+    if !result.ok { panic("worker did not finish") }
+    if !result.normal { panic(result.reason) }
+}
+
+func main() {
+    service := spawnMonitor(counter, CounterArgs{workers: 4})
+    a := spawnMonitor(worker, WorkerArgs{counter: service.pid, increments: 1000})
+    b := spawnMonitor(worker, WorkerArgs{counter: service.pid, increments: 1000})
+    c := spawnMonitor(worker, WorkerArgs{counter: service.pid, increments: 1000})
+    d := spawnMonitor(worker, WorkerArgs{counter: service.pid, increments: 1000})
+
+    // This request may arrive before the workers finish. The service replies
+    // when all four Done messages have arrived.
+    send(service.pid, Command{kind: 3, reply: self()})
+    result := receive[Snapshot](5000)
+    if !result.ok { panic("counter response timed out") }
+    println("Counter:", result.value.total)
+    awaitNormal(a)
+    awaitNormal(b)
+    awaitNormal(c)
+    awaitNormal(d)
+    awaitNormal(service)
+}

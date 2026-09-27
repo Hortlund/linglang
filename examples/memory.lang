@@ -1,0 +1,25 @@
+package main
+
+type Node struct {
+	value int
+	next  *Node
+}
+
+func cycle(seed int) *Node {
+	a := Node{value: seed}
+	b := Node{value: seed + 1}
+	a.next = &b
+	b.next = &a
+	return &a
+}
+
+func main() {
+	total := 0
+	var last *Node
+	for i := 0; i < 20000; i++ {
+		last = cycle(i)
+		total += last.next.value
+	}
+	println("Total:", total)
+	println("Last cycle:", last.value, last.next.value, last.next.next == last)
+}

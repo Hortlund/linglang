@@ -1,0 +1,12 @@
+package main
+
+type Point struct { x int; y int }
+
+func main() {
+	p := Point{}
+	for i := 0; i < 100000; i++ {
+		p.x += i
+		p.y++
+	}
+	if p.x != 4999950000 || p.y != 100000 { zero := 0; println(1 / zero) }
+}

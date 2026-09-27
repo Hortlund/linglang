@@ -1,0 +1,58 @@
+package main
+
+type CounterArgs struct { parent Pid; initial int }
+type Started struct { pid Pid }
+type Command struct { kind string; amount int; reply Pid }
+
+func counter(args CounterArgs) {
+    total := args.initial
+    // Explicit application readiness, sent again by every replacement process.
+    send(args.parent, Started{pid: self()})
+    for {
+        delivery := receive[Command](-1)
+        cmd := delivery.value
+        if cmd.kind == "crash" { panic("demonstration crash") }
+        if cmd.kind == "add" { total += cmd.amount }
+        send(cmd.reply, total)
+    }
+}
+
+func ready() Pid {
+    message := receive[Started](5000)
+    if !message.ok { panic("counter did not become ready") }
+    return message.value.pid
+}
+
+func readCounter(pid Pid, kind string, amount int) int {
+    send(pid, Command{kind: kind, amount: amount, reply: self()})
+    response := receive[int](5000)
+    if !response.ok { panic("counter response timed out") }
+    return response.value
+}
+
+func main() {
+    // At most three restarts within five seconds. OTP escalates a crash loop.
+    supervisor := startSupervisor(3, 5)
+    child := supervise(supervisor, "counter", counter,
+        CounterArgs{parent: self(), initial: 10}, ChildOptions{restart: "permanent"})
+    if !child.ok { panic(child.reason) }
+    first := ready()
+    println("Before crash:", readCounter(first, "add", 5))
+
+    failure := monitor(first)
+    send(first, Command{kind: "crash"})
+    exited := wait(failure, 5000)
+    if !exited.ok { panic("crash was not observed") }
+    replacement := ready()
+    current := lookupChild(supervisor, "counter")
+    if !current.ok || current.pid != replacement { panic("replacement lookup failed") }
+    println("Restarted with new PID:", replacement != first)
+    // Restart uses the original argument snapshot. In-memory state is not durable.
+    println("After restart:", readCounter(current.pid, "get", 0))
+
+    workerExit := monitor(current.pid)
+    println("Supervisor stopped:", stopSupervisor(supervisor))
+    stopped := wait(workerExit, 5000)
+    if !stopped.ok { panic("child survived shutdown") }
+    println("Child shutdown:", stopped.reason)
+}

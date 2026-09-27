@@ -1,0 +1,8 @@
+/bin/
+/_build/
+*.beam
+erl_crash.dump
+.DS_Store
+
+# Local AI-generated documentation, handoffs, and reports
+/docs/

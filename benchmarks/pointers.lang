@@ -1,0 +1,13 @@
+package main
+
+type Counter struct { value int }
+
+func increment(counter *Counter) { counter.value++ }
+
+func main() {
+	counter := Counter{}
+	for i := 0; i < 100000; i++ {
+		increment(&counter)
+	}
+	if counter.value != 100000 { zero := 0; println(1 / zero) }
+}
