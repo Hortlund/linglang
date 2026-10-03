@@ -529,8 +529,32 @@ go run ./cmd/linglang emit examples/counter.lang
 
 `--gc-stress` collects at every safe point. `--gc-stats` prints the managed-heap
 statistics. `--no-opt` uses the original compiler backend. same program, more cells.
+small helpers that cannot allocate managed cells or trigger collection borrow
+their caller's roots. fewer scopes around `counter.value++`, same pointer.
+
 `build` writes BEAM modules; `pack` bundles an executable; `release` includes the
 VM too; `emit` prints generated Erlang. this is where the Erlang was hiding.
+
+## how fast is the guy
+
+```sh
+go run ./cmd/bench
+go run ./cmd/bench -compare -samples 21 -warmup 3 -out _build/benchmarks/four-languages.json
+go run ./cmd/bench -samples 21 -warmup 3 -workload pointers -out _build/benchmarks/pointers.json
+```
+
+benchmarks compare the optimized compiler, the old cell backend, and handwritten
+Erlang. arithmetic, calls, structs, pointers, lists, maps, strings, and messages
+all have to produce the right answer before they get a number. no points for
+being fast and wrong. that is just a calculator with confidence.
+
+`-compare` runs optimized linglang against Erlang, Elixir, and native Go instead.
+it needs `elixir` on your path. four languages enter. all four must do the maths.
+
+the timer measures program execution, excluding compilation and runtime startup.
+results include median and p95 time, managed cell allocations, and reductions.
+raw samples go in `_build/benchmarks/results.json`.
+[workloads, measurement details, and a local baseline](benchmarks/README.md).
 
 ## things you cannot do
 
@@ -766,22 +790,35 @@ no Go sneaking into the compilation step wearing a fake moustache.
 
 pass explicit source files from one package. functions, recursion, primitive
 `int`/`bool`/`string` variables, constants, arithmetic, bitwise operations, direct
-calls, returns, blocks, and `if`/`else` work. so do printing, string `len`,
-`formatInt`, `trim`, `byteAt`, `slice`, `isLetter`, `isDigit`, `assert`, and string
-`panic`. the emitter sorts files, retains checked expression types and bindings,
+calls, returns, blocks, `if`/`else`, and `for` loops work. nested loops, `break`,
+`continue`, and returns from inside loops use the existing BEAM runtime.
+printing, string `len`, `formatInt`, `trim`, `byteAt`, `slice`, `isLetter`,
+`isDigit`, `assert`, and string `panic` work too. the emitter sorts files,
+retains checked expression types and bindings,
 and rejects unsupported constructs with source locations before printing a module.
 
-loops, switches, structs, pointers, collections, OTP calls,
+range loops, switches, structs, pointers, collections, OTP calls,
 multiple assignment, and `if` initializers still need the seed backend. runtime
 conversions support identity casts only; variable declarations need one named
 variable per spec. embedded constant strings are capped
 at 1 MiB and expression nesting at 128 levels. compiling the compiler itself
 is the next boss fight; this emitter cannot compile its own source yet.
 
+the loop example counts three ASCII identifiers and sums 1,000 integers:
+
+```sh
+./bin/linglang-emitter examples/bootstrap_loops.lang > _build/bootstrap-demo/linglang_program.erl
+erlc -o _build/bootstrap-demo _build/bootstrap-demo/linglang_program.erl
+erl -noshell -pa _build/bootstrap-demo -eval 'linglang_program:main(), halt().'
+```
+
+it prints `identifiers: 3` and `loop sum: 499500`. use the setup above first;
+the program and runtime need to live in the same build directory.
+
 ```sh
 ./bin/linglang test --gc-stress --gc-stats --timeout 2m bootstrap/emitter
 ./bin/linglang test --no-opt --gc-stress --gc-stats --timeout 2m bootstrap/emitter
-./bin/linglang fmt --check bootstrap/emitter examples/bootstrap_demo
+./bin/linglang fmt --check bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang
 ```
 
 ## why

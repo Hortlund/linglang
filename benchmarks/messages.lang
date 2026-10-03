@@ -1,0 +1,22 @@
+package main
+
+func echo(parent Pid) {
+	for i := 0; i < 10000; i++ {
+		message := receive[int](5000)
+		assert(message.ok)
+		send(parent, message.value)
+	}
+}
+
+func main() {
+	worker := spawnMonitor(echo, self())
+	total := 0
+	for i := 0; i < 10000; i++ {
+		send(worker.pid, i)
+		reply := receive[int](5000)
+		assert(reply.ok)
+		total += reply.value
+	}
+	exited := wait(worker.monitor, 5000)
+	assert(exited.ok && exited.normal && total == 49995000)
+}

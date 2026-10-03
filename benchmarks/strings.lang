@@ -1,0 +1,14 @@
+package main
+
+func main() {
+	total := 0
+	for i := 0; i < 10000; i++ {
+		// A small config line: split, trim, and parse each decimal field.
+		for _, field := range split(" 12, 34, 56, 78 ", ",") {
+			parsed := parseInt(trim(field))
+			assert(parsed.ok)
+			total += parsed.value
+		}
+	}
+	assert(total == 1800000)
+}

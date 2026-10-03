@@ -84,6 +84,12 @@ func (c *compiler) optimizedFunction(fn *ast.FuncDecl) (string, error) {
 		g.rooted = g.rooted || v.boxed || containsReferences(v.object.Type())
 	}
 	g.safePoints = g.safePoints || g.rooted
+	// Leaf helpers may borrow their caller's roots. Without managed allocation,
+	// loops, blocking intrinsics, or calls that could collect, no managed cell
+	// can disappear while the helper executes. BEAM still traces native terms.
+	if c.nonCollectingLeaf(fn) {
+		g.rooted, g.safePoints = false, false
+	}
 	end := g.block()
 	end.returns = true
 	entry := g.sequence(fn.Body.List, end, nil, nil)
@@ -117,6 +123,46 @@ func (c *compiler) optimizedFunction(fn *ast.FuncDecl) (string, error) {
 		functions = append(functions, code)
 	}
 	return strings.Join(functions, "\n\n"), nil
+}
+
+func (c *compiler) nonCollectingLeaf(fn *ast.FuncDecl) bool {
+	safe := true
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		if !safe {
+			return false
+		}
+		switch node := node.(type) {
+		case *ast.ForStmt, *ast.RangeStmt:
+			safe = false // retain safe points on every back edge
+		case *ast.UnaryExpr:
+			if node.Op == token.AND {
+				safe = false // may box a local or allocate a composite literal
+			}
+		case *ast.CallExpr:
+			safe = c.nonCollectingCall(node)
+		}
+		return safe
+	})
+	return safe
+}
+
+func (c *compiler) nonCollectingCall(call *ast.CallExpr) bool {
+	id := callIdentifier(call.Fun)
+	if id == nil {
+		return false
+	}
+	obj := c.info.Uses[id]
+	if _, builtin := obj.(*types.Builtin); builtin {
+		return id.Name == "len"
+	}
+	// Resolve the actual intrinsic binding: a user function with one of these
+	// names may allocate or collect. Keep this list limited to runtime helpers
+	// that never call new, collect, safepoint, or another linglang function.
+	switch c.intrinsics[obj] {
+	case "byteAt", "slice", "runeAt", "formatInt", "trim", "parseInt", "isLetter", "isDigit", "assert":
+		return true
+	}
+	return false
 }
 
 func containsReferences(t types.Type) bool {
@@ -454,7 +500,7 @@ func (g *localLowering) emitSimple(stmt ast.Stmt, state map[types.Object]string)
 			parts = append(parts, g.declare(obj, value, state))
 			// A later initializer may call a function and collect. New direct
 			// pointer values must join the function roots before that happens.
-			if !g.lookup[obj].boxed && containsReferences(obj.Type()) {
+			if g.rooted && !g.lookup[obj].boxed && containsReferences(obj.Type()) {
 				parts = append(parts, "linglang_rt:keep("+state[obj]+")")
 			}
 		}

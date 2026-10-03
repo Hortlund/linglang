@@ -28,7 +28,7 @@ func TestCheckedMetadata() {
 
 func TestEmitterBoundaries() {
 	for _, source := range (List[string]{
-		"func main(){for{break}}",
+		"func main(){for range (List[int]{1}) {}}",
 		"func main(){n:=30;println('a'<<n)}",
 		"func main(){n:=30;println('a'>>n)}",
 		"func main(){n:=30;println(('a'<<n)==0)}",
@@ -44,6 +44,8 @@ func TestEmitterBoundaries() {
 		"func main(){x:=1;p:=&x;println(*p)}",
 		"func main(){println(List[int]{1})}",
 		"func f(n int)int{if n>0{return 1}};func main(){}",
+		"func f()int{for{break}};func main(){}",
+		"func f()int{for true{return 1}};func main(){}",
 		"func main(){panic(1)}",
 		"func main(){startSupervisor(1,100)}",
 		"func main(){x,y:=1,2;println(x,y)}",
@@ -53,6 +55,20 @@ func TestEmitterBoundaries() {
 		assert(parsed.ok)
 		result := emitPackage(List[SyntaxNode]{parsed.root})
 		assert(!result.ok && result.module == "" && result.reason != "" && result.at.filename == "unsupported.lang")
+	}
+}
+
+func TestEmitterLoops() {
+	for _, source := range (List[string]{
+		"func main(){for{break}}",
+		"func main(){n:=0;for n<2{n++;continue};for i:=0;i<2;i++{println(i)}}",
+		"func f()int{for{return 42}};func main(){println(f())}",
+		"func f()int{for{for{break};return 42}};func main(){println(f())}",
+	}) {
+		parsed := parse("loops.lang", "package main\n"+source)
+		assert(parsed.ok)
+		result := emitPackage(List[SyntaxNode]{parsed.root})
+		assert(result.ok && result.reason == "" && len(split(result.module, "linglang_rt:loop(")) > 1)
 	}
 }
 

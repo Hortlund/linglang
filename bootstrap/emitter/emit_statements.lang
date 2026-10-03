@@ -84,6 +84,22 @@ func emitAssignment(e *Emitter, node SyntaxNode) string {
 	return emitScope("linglang_rt:write(" + cell + ", " + value + ")")
 }
 
+func emitFor(e *Emitter, node SyntaxNode) string {
+	init := emitStatement(e, childAt(node, 0))
+	condition := "true"
+	if childAt(node, 1).kind != "nil" {
+		condition = emitExpression(e, childAt(node, 1), false)
+	}
+	post := emitStatement(e, childAt(node, 2))
+	loop := emitFresh(e)
+	e.loops = prepend(loop, e.loops)
+	body := emitStatement(e, childAt(node, 3))
+	e.loops = tail(e.loops)
+	// The supported variables are primitive values; their identity cannot
+	// escape. One cell per loop initializer suffices until pointers are added.
+	return emitScope(init + ", " + loop + " = make_ref(), linglang_rt:loop(fun() -> " + condition + " end, fun() -> " + body + " end, fun() -> " + post + " end, " + loop + ")")
+}
+
 func emitStatement(e *Emitter, node SyntaxNode) string {
 	if e.reason != "" {
 		return ""
@@ -93,6 +109,14 @@ func emitStatement(e *Emitter, node SyntaxNode) string {
 		return "ok"
 	case "BlockStmt":
 		return emitBlock(e, node)
+	case "ForStmt":
+		return emitFor(e, node)
+	case "BranchStmt":
+		if !head(e.loops).ok || (node.text != "break" && node.text != "continue") {
+			emitFail(e, node.at, "bootstrap emitter requires break or continue inside a loop")
+			return ""
+		}
+		return "throw({linglang_" + node.text + ", " + head(e.loops).value + "})"
 	case "DeclStmt":
 		return emitVariables(e, childAt(node, 0))
 	case "AssignStmt":

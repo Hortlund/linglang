@@ -1,6 +1,9 @@
 package main
 
-type Point struct { x int; y int }
+type Point struct {
+	x int
+	y int
+}
 
 func main() {
 	p := Point{}
@@ -8,5 +11,8 @@ func main() {
 		p.x += i
 		p.y++
 	}
-	if p.x != 4999950000 || p.y != 100000 { zero := 0; println(1 / zero) }
+	if p.x != 4999950000 || p.y != 100000 {
+		zero := 0
+		println(1 / zero)
+	}
 }

@@ -32,6 +32,13 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 		{"negative_shift", `func main(){n:=-1;println(1<<n)}`, "", "linglang_negative_shift"},
 		{"panic_cleanup", `func f(n int){x:=n+1;_=x;panic("bean down")};func main(){f(1)}`, "", "bean down"},
 		{"assert_location", "func main(){\nassert(false)\n}", "", "fixture.lang:3: assertion failed"},
+		{"for_forms_and_scope", `func main(){total:=0;for i:=0;i<5;i++{total+=i};n:=0;for n<3{n++};for{total++;break};for ;;{break};for i:=5;i>3;i--{total+=i};println(total,n)}`, "20 3\n", ""},
+		{"nested_break_continue", `func main(){total:=0;for i:=0;i<3;i++{for j:=0;j<4;j++{if j==1{continue};if j==3{break};total+=i+j}};println(total)}`, "12\n", ""},
+		{"continue_runs_post", `func main(){total:=0;for i:=0;i<5;i++{if i<3{continue};total+=i};println(total)}`, "7\n", ""},
+		{"loop_return", `func find(n int)int{for{for{break};if n==3{return n};n++}};func main(){println(find(0))}`, "3\n", ""},
+		{"loop_local_shadowing", `func main(){n:=10;for n:=0;n<3;n++{{n:=40;println(n)};println(n)};println(n)}`, "40\n0\n40\n1\n40\n2\n10\n", ""},
+		{"condition_side_effects", `func condition(n int)bool{print(n);return n<3};func main(){n:=0;for condition(n){n++};println(" done",n)}`, "0123 done 3\n", ""},
+		{"loop_panic_cleanup", `func main(){for i:=0;i<3;i++{for{panic("loop down")}}}`, "", "loop down"},
 	}
 	files, err := readSources("../../bootstrap/emitter")
 	if err != nil {
@@ -184,7 +191,27 @@ func TestBootstrapEmitterPackedWithoutGo(t *testing.T) {
 		t.Fatalf("OTP-only program: %q (%v)\n%s", out, err, stderr)
 	}
 	emitterCleanGC(t, stderr)
-	for _, code := range []string{"func main(){for{break}}", "func f()int{};func main(){}", "const N=1<<100;func main(){println(N)}", "func main(){n:=30;println('a'<<n)}", "func main(){n:=30;println('a'>>n)}", "func main(){n:=30;println(('a'<<n)==0)}", "func main(){n:=30;println(('a'<<n)<0)}", "func main(){n:=30;println(^('a'<<n))}", "func main(){n:=30;println(-('a'<<n))}", "func main(){n:=30;println(('a'<<n)+1)}", "func main(){n:=30;_ = 'a'<<n}", "func main(){n:=30;panic('a'<<n)}"} {
+	loopPath, err := filepath.Abs("../../examples/bootstrap_loops.lang")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loopModule, stderr, err := invoke(artifact, loopPath)
+	if err != nil {
+		t.Fatalf("OTP-only loop emission: %v\n%s", err, stderr)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "linglang_program.erl"), []byte(loopModule), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, err = invoke(filepath.Join(otp, "erlc"), "-o", dir, filepath.Join(dir, "linglang_program.erl"))
+	if err != nil {
+		t.Fatalf("OTP-only loop compilation: %v\n%s", err, stderr)
+	}
+	out, stderr, err = invoke(filepath.Join(otp, "erl"), "-noshell", "-pa", dir, "-eval", evaluationScript(true, true))
+	if err != nil || out != "identifiers: 3\nloop sum: 499500\n" {
+		t.Fatalf("OTP-only loop execution: %q (%v)\n%s", out, err, stderr)
+	}
+	emitterCleanGC(t, stderr)
+	for _, code := range []string{"func main(){for range (List[int]{1}) {}}", "func f()int{};func main(){}", "const N=1<<100;func main(){println(N)}", "func main(){n:=30;println('a'<<n)}", "func main(){n:=30;println('a'>>n)}", "func main(){n:=30;println(('a'<<n)==0)}", "func main(){n:=30;println(('a'<<n)<0)}", "func main(){n:=30;println(^('a'<<n))}", "func main(){n:=30;println(-('a'<<n))}", "func main(){n:=30;println(('a'<<n)+1)}", "func main(){n:=30;_ = 'a'<<n}", "func main(){n:=30;panic('a'<<n)}"} {
 		path := filepath.Join(dir, "bad.lang")
 		if err := os.WriteFile(path, []byte("package main\n"+code), 0600); err != nil {
 			t.Fatal(err)

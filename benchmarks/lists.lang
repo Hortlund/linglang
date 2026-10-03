@@ -1,0 +1,13 @@
+package main
+
+func main() {
+	var items List[int]
+	for i := 0; i < 20000; i++ {
+		items = prepend(i, items)
+	}
+	total := 0
+	for _, item := range items {
+		total += item
+	}
+	assert(total == 199990000 && len(items) == 20000)
+}

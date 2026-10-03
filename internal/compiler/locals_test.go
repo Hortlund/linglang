@@ -107,12 +107,70 @@ func main() {
  println(*first)
 }
 `, "1\n"},
+		{"leaf_borrowed_pointer_return_survives_next_call", `
+type Node struct { n int; next *Node }
+func forward(p *Node) *Node { var alias *Node = p; return alias }
+func link(a, b *Node) *Node { a.next = b; b.n++; return b }
+func churn() int { for i := 0; i < 20; i++ { _ = &Node{n:i} }; return 7 }
+func makeNode(n int) *Node { return &Node{n:n} }
+func main() {
+ a := makeNode(3)
+ b := makeNode(4)
+ println(forward(link(a,b)).n, churn(), a.next.n)
+ var p = forward(makeNode(9))
+ var q = makeNode(churn())
+ println(p.n, q.n)
+}
+`, "5 7 5\n9 7\n"},
+		{"shadowed_builtin_can_collect", `
+type Node struct { n int }
+func len(s string) *Node { for n := 0; n < 30; n++ { _ = &Node{n:n} }; return &Node{n:42} }
+func read() int { p := len(""); _ = len(""); return p.n }
+func main() { println(read()) }
+`, "42\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := execute(t, tc.source)
 			if err != nil || got != tc.want {
 				t.Fatalf("got %q (%v), want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestBorrowedRootLeafLowering(t *testing.T) {
+	for _, tc := range []struct {
+		name, prefix, body string
+		borrow             bool
+	}{
+		{name: "pointer_update", body: "*p++; return *p", borrow: true},
+		{name: "pointer_local", body: "var alias *int = p; return *alias", borrow: true},
+		{name: "noncollecting_intrinsics", body: "assert(*p >= 0); _ = formatInt(*p); return *p", borrow: true},
+		{name: "managed_local", body: "n := 1; q := &n; return *q + *p"},
+		{name: "managed_literal", prefix: "type Node struct { n int }", body: "q := &Node{n:1}; return q.n + *p"},
+		{name: "user_call", prefix: "func value() int { return 1 }", body: "return value() + *p"},
+		{name: "builtin_shadow", prefix: "func len(s string) int { return 1 }", body: "_ = len(\"local\"); return *p"},
+		{name: "loop", body: "for i := 0; i < 2; i++ { *p++ }; return *p"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := "package main\n" + tc.prefix + "\nfunc helper(p *int) int {" + tc.body + "}\nfunc main() {}"
+			program, err := Compile("leaf.lang", []byte(source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			start := strings.Index(program, "\n"+functionName("helper")+"(")
+			if start < 0 {
+				t.Fatal("missing helper definition")
+			}
+			next := strings.Index(program[start+1:], "\n"+functionName("main")+"(")
+			if next < 0 {
+				t.Fatal("missing main definition")
+			}
+			body := program[start : start+1+next]
+			protocol := strings.Contains(body, "linglang_rt:scope(") || strings.Contains(body, "linglang_rt:roots(") || strings.Contains(body, "linglang_rt:safepoint()") || strings.Contains(body, "linglang_rt:keep(")
+			if protocol == tc.borrow {
+				t.Fatalf("borrow=%v, root protocol=%v:\n%s", tc.borrow, protocol, body)
 			}
 		})
 	}

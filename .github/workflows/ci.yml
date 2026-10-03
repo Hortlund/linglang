@@ -36,7 +36,7 @@ jobs:
       - name: Build the CLI
         run: go build -o _build/linglang ./cmd/linglang
       - name: Check example formatting
-        run: ./_build/linglang fmt --check examples/bean_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker bootstrap/emitter examples/bootstrap_demo
+        run: ./_build/linglang fmt --check examples/bean_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang
       - name: Test beans and the bootstrap tools on both backends with GC stress
         run: |
           ./_build/linglang test --gc-stress --gc-stats examples/bean_tests

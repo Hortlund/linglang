@@ -14,6 +14,7 @@ type Emitter struct {
 	next    int
 	depth   int
 	ret     string
+	loops   List[string]
 	reason  string
 	at      Token
 }
@@ -200,8 +201,8 @@ func emitFunction(e *Emitter, node SyntaxNode) string {
 	return emitFunctionName(name.text) + "(" + join(args, ", ") + ") ->\n    " + emitScope(join(setup, ",\n    ")) + "."
 }
 
-// Conservative flow checking for the supported subset. Unsupported loops and
-// switches are rejected even when they appear after a terminating statement.
+// Conservative flow checking for the supported subset. Unsupported statements
+// are still emitted/validated after a terminating statement, then rejected.
 func emitTerminates(e *Emitter, node SyntaxNode) bool {
 	if node.kind == "ReturnStmt" {
 		return true
@@ -216,11 +217,32 @@ func emitTerminates(e *Emitter, node SyntaxNode) bool {
 	if node.kind == "IfStmt" {
 		return emitTerminates(e, childAt(node, 2)) && emitTerminates(e, childAt(node, 3))
 	}
+	if node.kind == "ForStmt" {
+		return childAt(node, 1).kind == "nil" && !emitLoopHasBreak(childAt(node, 3))
+	}
 	if node.kind == "ExprStmt" {
 		call := childAt(node, 0)
 		if call.kind == "CallExpr" {
 			callee := emitValue(e, childAt(call, 0))
 			return callee.kind == "intrinsic" && callee.name == "panic"
+		}
+	}
+	return false
+}
+
+// Breaks in a nested loop target that loop; they do not make this loop exit.
+func emitLoopHasBreak(body SyntaxNode) bool {
+	pending := List[SyntaxNode]{body}
+	for head(pending).ok {
+		node := head(pending).value
+		pending = tail(pending)
+		if node.kind == "BranchStmt" && node.text == "break" {
+			return true
+		}
+		if node.kind != "ForStmt" && node.kind != "RangeStmt" && node.kind != "SwitchStmt" {
+			for _, child := range node.children {
+				pending = prepend(child, pending)
+			}
 		}
 	}
 	return false
