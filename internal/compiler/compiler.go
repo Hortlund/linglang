@@ -174,6 +174,10 @@ func compileFiles(sources []SourceFile, options Options, tests *[]TestCase) (str
 			}
 		}
 		if expr, ok := n.(ast.Expr); ok {
+			if c.runtimeRune(expr) {
+				validationErr = c.errorf(expr, "runtime rune expressions are unsupported; use an int context")
+				return false
+			}
 			t := c.info.TypeOf(expr)
 			_, list := c.listElement(t)
 			_, _, dictionary := c.mapTypes(t)
@@ -441,9 +445,12 @@ func (c *compiler) statementCode(stmt ast.Stmt) (string, error) {
 				return "linglang_rt:write(" + v[0] + ", " + v[1] + ")"
 			}), nil
 		}
-		op, ok := map[token.Token]string{token.ADD_ASSIGN: "add", token.SUB_ASSIGN: "sub", token.MUL_ASSIGN: "mul", token.QUO_ASSIGN: "divide", token.REM_ASSIGN: "remain"}[s.Tok]
+		op, ok := map[token.Token]string{token.ADD_ASSIGN: "add", token.SUB_ASSIGN: "sub", token.MUL_ASSIGN: "mul", token.QUO_ASSIGN: "divide", token.REM_ASSIGN: "remain", token.AND_ASSIGN: "bit_and", token.OR_ASSIGN: "bit_or", token.XOR_ASSIGN: "bit_xor", token.AND_NOT_ASSIGN: "bit_clear", token.SHL_ASSIGN: "shift_left", token.SHR_ASSIGN: "shift_right"}[s.Tok]
 		if !ok {
 			return "", c.errorf(s, "unsupported assignment operator %s", s.Tok)
+		}
+		if s.Tok == token.SHL_ASSIGN || s.Tok == token.SHR_ASSIGN {
+			value = c.shiftCount(s.Rhs[0], value)
 		}
 		return c.ordered([]string{address}, func(v []string) string {
 			return "linglang_rt:write(" + v[0] + ", " + c.ordered([]string{"linglang_rt:read(" + v[0] + ")", value}, func(x []string) string {
@@ -571,6 +578,36 @@ func (c *compiler) ordered(expressions []string, finish func([]string) string) s
 	return "(begin " + strings.Join(parts, ", ") + " end)"
 }
 
+func unsignedInteger(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	b, ok := t.Underlying().(*types.Basic)
+	// go/types leaves dynamic, untyped shift counts marked untyped. Their
+	// runtime context is uint, including arithmetic inside the count.
+	return ok && (b.Info()&types.IsUnsigned != 0 || b.Kind() == types.UntypedInt || b.Kind() == types.UntypedRune)
+}
+
+func (c *compiler) shiftCount(expr ast.Expr, value string) string {
+	if unsignedInteger(c.info.TypeOf(expr)) {
+		return "((" + value + ") band 18446744073709551615)"
+	}
+	return value
+}
+
+// Check the folded constant at its runtime boundary, rather than its leaves:
+// a large constant subexpression may reduce to a representable operand.
+func (c *compiler) integerOperand(expr ast.Expr, unsigned bool) (string, error) {
+	if unsigned {
+		if value := c.info.Types[expr].Value; value != nil && value.Kind() == constant.Int {
+			if _, ok := constant.Uint64Val(value); !ok {
+				return "", c.errorf(expr, "constant operand overflows unsigned shift count")
+			}
+		}
+	}
+	return c.expression(expr)
+}
+
 func (c *compiler) expression(expr ast.Expr) (string, error) {
 	if operation := c.rangeOps[expr]; operation != "" {
 		call := expr.(*ast.CallExpr)
@@ -614,7 +651,7 @@ func (c *compiler) expression(expr ast.Expr) (string, error) {
 		if e.Op == token.AND {
 			return c.address(e.X)
 		}
-		x, err := c.expression(e.X)
+		x, err := c.integerOperand(e.X, unsignedInteger(c.info.TypeOf(e)))
 		if err != nil {
 			return "", err
 		}
@@ -625,15 +662,22 @@ func (c *compiler) expression(expr ast.Expr) (string, error) {
 			return "linglang_rt:binary(sub, 0, " + x + ")", nil
 		case token.ADD:
 			return x, nil
+		case token.XOR:
+			return "linglang_rt:binary(bit_xor, " + x + ", -1)", nil
 		default:
 			return "", c.errorf(e, "unsupported unary operator %s", e.Op)
 		}
 	case *ast.BinaryExpr:
-		left, err := c.expression(e.X)
+		unsigned := unsignedInteger(c.info.TypeOf(e))
+		left, err := c.integerOperand(e.X, unsigned)
 		if err != nil {
 			return "", err
 		}
-		right, err := c.expression(e.Y)
+		unsignedRight := unsigned
+		if e.Op == token.SHL || e.Op == token.SHR {
+			unsignedRight = unsignedInteger(c.info.TypeOf(e.Y))
+		}
+		right, err := c.integerOperand(e.Y, unsignedRight)
 		if err != nil {
 			return "", err
 		}
@@ -643,9 +687,18 @@ func (c *compiler) expression(expr ast.Expr) (string, error) {
 		if e.Op == token.LOR {
 			return "((" + left + ") orelse (" + right + "))", nil
 		}
-		op, ok := map[token.Token]string{token.ADD: "add", token.SUB: "sub", token.MUL: "mul", token.QUO: "divide", token.REM: "remain", token.EQL: "eq", token.NEQ: "ne", token.LSS: "lt", token.LEQ: "le", token.GTR: "gt", token.GEQ: "ge"}[e.Op]
+		op, ok := map[token.Token]string{token.ADD: "add", token.SUB: "sub", token.MUL: "mul", token.QUO: "divide", token.REM: "remain", token.AND: "bit_and", token.OR: "bit_or", token.XOR: "bit_xor", token.AND_NOT: "bit_clear", token.SHL: "shift_left", token.SHR: "shift_right", token.EQL: "eq", token.NEQ: "ne", token.LSS: "lt", token.LEQ: "le", token.GTR: "gt", token.GEQ: "ge"}[e.Op]
 		if !ok {
 			return "", c.errorf(e, "unsupported binary operator %s", e.Op)
+		}
+		if e.Op == token.SHL || e.Op == token.SHR {
+			right = c.shiftCount(e.Y, right)
+		}
+		// Untyped runtime shift counts acquire uint context. Their
+		// intermediate values use the same 64 bits, but division and right
+		// shift must interpret those bits as unsigned before evaluating them.
+		if unsignedInteger(c.info.TypeOf(e)) && (e.Op == token.QUO || e.Op == token.REM || e.Op == token.SHR) {
+			op += "_unsigned"
 		}
 		return c.ordered([]string{left, right}, func(v []string) string { return "linglang_rt:binary(" + op + ", " + v[0] + ", " + v[1] + ")" }), nil
 	case *ast.CompositeLit:

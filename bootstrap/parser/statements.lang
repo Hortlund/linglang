@@ -16,7 +16,7 @@ func parseSimple(p *Parser, header bool, rangeAllowed bool) SyntaxNode {
 			return noSyntax()
 		}
 		parseAdvance(p)
-		return syntax("RangeHeader", at, "", List[SyntaxNode]{syntax("Names", at, "", nil), parseExpression(p, 1, true)})
+		return parserSyntax(p, "RangeHeader", at, "", List[SyntaxNode]{parserSyntax(p, "Names", at, "", nil), parseExpression(p, 1, true)})
 	}
 	left := parseExpressionList(p, header)
 	if assignmentOperator(p.current.kind) {
@@ -33,10 +33,10 @@ func parseSimple(p *Parser, header bool, rangeAllowed bool) SyntaxNode {
 				}
 			}
 			parseAdvance(p)
-			return syntax("RangeHeader", at, op, List[SyntaxNode]{syntax("Names", at, "", left), parseExpression(p, 1, true)})
+			return parserSyntax(p, "RangeHeader", at, op, List[SyntaxNode]{parserSyntax(p, "Names", at, "", left), parseExpression(p, 1, true)})
 		}
 		right := parseExpressionList(p, header)
-		return syntax("AssignStmt", at, op, List[SyntaxNode]{syntax("Lhs", at, "", left), syntax("Rhs", at, "", right)})
+		return parserSyntax(p, "AssignStmt", at, op, List[SyntaxNode]{parserSyntax(p, "Lhs", at, "", left), parserSyntax(p, "Rhs", at, "", right)})
 	}
 	if len(left) != 1 {
 		parseFail(p, "expression statement needs one expression")
@@ -45,9 +45,9 @@ func parseSimple(p *Parser, header bool, rangeAllowed bool) SyntaxNode {
 	if p.current.kind == "++" || p.current.kind == "--" {
 		op := p.current.kind
 		parseAdvance(p)
-		return syntax("IncDecStmt", at, op, List[SyntaxNode]{value})
+		return parserSyntax(p, "IncDecStmt", at, op, List[SyntaxNode]{value})
 	}
-	return syntax("ExprStmt", at, "", List[SyntaxNode]{value})
+	return parserSyntax(p, "ExprStmt", at, "", List[SyntaxNode]{value})
 }
 
 func condition(p *Parser, stmt SyntaxNode) SyntaxNode {
@@ -73,7 +73,7 @@ func parseBlock(p *Parser) SyntaxNode {
 	}
 	expect(p, "}")
 	p.depth--
-	return syntax("BlockStmt", at, "", syntaxOrder(reversed))
+	return parserSyntax(p, "BlockStmt", at, "", syntaxOrder(reversed))
 }
 
 func parseStatement(p *Parser) SyntaxNode {
@@ -85,11 +85,11 @@ func parseStatement(p *Parser) SyntaxNode {
 	switch at.kind {
 	case ";":
 		parseAdvance(p)
-		result = syntax("EmptyStmt", at, "", nil)
+		result = parserSyntax(p, "EmptyStmt", at, "", nil)
 	case "{":
 		result = parseBlock(p)
 	case "var", "const", "type":
-		result = syntax("DeclStmt", at, "", List[SyntaxNode]{parseDeclaration(p, true)})
+		result = parserSyntax(p, "DeclStmt", at, "", List[SyntaxNode]{parseDeclaration(p, true)})
 	case "if":
 		result = parseIf(p)
 	case "for":
@@ -102,10 +102,10 @@ func parseStatement(p *Parser) SyntaxNode {
 		if p.current.kind != ";" && p.current.kind != "}" && p.current.kind != "EOF" {
 			values = parseExpressionList(p, false)
 		}
-		result = syntax("ReturnStmt", at, "", values)
+		result = parserSyntax(p, "ReturnStmt", at, "", values)
 	case "break", "continue", "fallthrough":
 		parseAdvance(p)
-		result = syntax("BranchStmt", at, at.kind, nil)
+		result = parserSyntax(p, "BranchStmt", at, at.kind, nil)
 	case "go", "defer", "goto", "select":
 		parseFail(p, "unsupported statement "+at.kind)
 	default:
@@ -138,7 +138,7 @@ func parseIf(p *Parser) SyntaxNode {
 			other = parseBlock(p)
 		}
 	}
-	return syntax("IfStmt", at, "", List[SyntaxNode]{init, cond, body, other})
+	return parserSyntax(p, "IfStmt", at, "", List[SyntaxNode]{init, cond, body, other})
 }
 
 func parseFor(p *Parser) SyntaxNode {
@@ -162,7 +162,7 @@ func parseFor(p *Parser) SyntaxNode {
 				value = head(tail(names)).value
 			}
 			body := parseBlock(p)
-			return syntax("RangeStmt", at, first.text, List[SyntaxNode]{key, value, childAt(first, 1), body})
+			return parserSyntax(p, "RangeStmt", at, first.text, List[SyntaxNode]{key, value, childAt(first, 1), body})
 		}
 		if accept(p, ";") {
 			init = first
@@ -181,7 +181,7 @@ func parseFor(p *Parser) SyntaxNode {
 		}
 	}
 	body := parseBlock(p)
-	return syntax("ForStmt", at, "", List[SyntaxNode]{init, cond, post, body})
+	return parserSyntax(p, "ForStmt", at, "", List[SyntaxNode]{init, cond, post, body})
 }
 
 func parseSwitch(p *Parser) SyntaxNode {
@@ -221,8 +221,8 @@ func parseSwitch(p *Parser) SyntaxNode {
 				statementEnd(p)
 			}
 		}
-		clauses = prepend(syntax("CaseClause", start, "", List[SyntaxNode]{syntax("Cases", start, "", values), syntax("Body", start, "", syntaxOrder(body))}), clauses)
+		clauses = prepend(parserSyntax(p, "CaseClause", start, "", List[SyntaxNode]{parserSyntax(p, "Cases", start, "", values), parserSyntax(p, "Body", start, "", syntaxOrder(body))}), clauses)
 	}
 	expect(p, "}")
-	return syntax("SwitchStmt", at, "", List[SyntaxNode]{init, tag, syntax("BlockStmt", opening, "", syntaxOrder(clauses))})
+	return parserSyntax(p, "SwitchStmt", at, "", List[SyntaxNode]{init, tag, parserSyntax(p, "BlockStmt", opening, "", syntaxOrder(clauses))})
 }

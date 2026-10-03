@@ -1,0 +1,130 @@
+package main
+
+func emitBlock(e *Emitter, node SyntaxNode) string {
+	var parts List[string]
+	for _, statement := range node.children {
+		parts = append(parts, "linglang_rt:safepoint()")
+		parts = append(parts, emitStatement(e, statement))
+	}
+	parts = append(parts, "ok")
+	return emitScope(join(parts, ",\n        "))
+}
+
+func emitZero(id int) string {
+	if id == tString {
+		return "<<>>"
+	}
+	if id == tBool {
+		return "false"
+	}
+	return "0"
+}
+
+func emitVariables(e *Emitter, node SyntaxNode) string {
+	if node.text == "const" {
+		return "ok"
+	}
+	if node.text != "var" {
+		emitFail(e, node.at, "bootstrap emitter does not support local types")
+		return ""
+	}
+	var parts List[string]
+	for _, spec := range node.children {
+		names := childAt(spec, 0).children
+		values := childAt(spec, 2).children
+		if len(names) != 1 || len(values) > 1 || head(names).value.text == "_" {
+			emitFail(e, spec.at, "bootstrap emitter requires one named variable per declaration")
+			return ""
+		}
+		name := head(names).value
+		id := emitDefinition(e, name).typeID
+		if !emitPrimitive(id) {
+			emitFail(e, name.at, "bootstrap emitter supports int, bool, and string variables")
+		}
+		value := emitZero(id)
+		if head(values).ok {
+			value = emitExpression(e, head(values).value, false)
+		}
+		parts = append(parts, emitCell(e, name, true)+" = linglang_rt:new("+emitScope(value)+")")
+	}
+	return "(begin " + join(parts, ", ") + " end)"
+}
+
+func emitAssignment(e *Emitter, node SyntaxNode) string {
+	lhs := childAt(node, 0).children
+	rhs := childAt(node, 1).children
+	if len(lhs) != 1 || len(rhs) != 1 {
+		emitFail(e, node.at, "bootstrap emitter does not support multiple assignment")
+		return ""
+	}
+	target := head(lhs).value
+	value := emitExpression(e, head(rhs).value, false)
+	if target.kind != "Ident" {
+		emitFail(e, target.at, "bootstrap emitter requires an identifier assignment target")
+		return ""
+	}
+	if target.text == "_" {
+		return emitScope(value)
+	}
+	if node.text == ":=" {
+		id := emitDefinition(e, target).typeID
+		if !emitPrimitive(id) {
+			emitFail(e, target.at, "bootstrap emitter supports int, bool, and string variables")
+		}
+		return emitCell(e, target, true) + " = linglang_rt:new(" + emitScope(value) + ")"
+	}
+	cell := emitCell(e, target, false)
+	if node.text != "=" {
+		op := slice(node.text, 0, len(node.text)-1)
+		if op == "<<" || op == ">>" {
+			value = emitShiftCount(e, head(rhs).value)
+		}
+		value = emitOrdered(e, List[string]{"linglang_rt:read(" + cell + ")", value}, "fun(A, B) -> linglang_rt:binary("+emitOperator(op)+", A, B) end")
+	}
+	return emitScope("linglang_rt:write(" + cell + ", " + value + ")")
+}
+
+func emitStatement(e *Emitter, node SyntaxNode) string {
+	if e.reason != "" {
+		return ""
+	}
+	switch node.kind {
+	case "nil", "EmptyStmt":
+		return "ok"
+	case "BlockStmt":
+		return emitBlock(e, node)
+	case "DeclStmt":
+		return emitVariables(e, childAt(node, 0))
+	case "AssignStmt":
+		return emitAssignment(e, node)
+	case "ExprStmt":
+		return emitScope(emitExpression(e, childAt(node, 0), false))
+	case "ReturnStmt":
+		value := "ok"
+		if head(node.children).ok {
+			value = emitExpression(e, head(node.children).value, false)
+		}
+		return emitScope("throw({linglang_return, " + e.ret + ", " + value + "})")
+	case "IncDecStmt":
+		target := childAt(node, 0)
+		if target.kind != "Ident" {
+			emitFail(e, target.at, "bootstrap emitter requires an identifier increment target")
+		}
+		op := "add"
+		if node.text == "--" {
+			op = "sub"
+		}
+		cell := emitCell(e, target, false)
+		return emitScope("linglang_rt:write(" + cell + ", linglang_rt:binary(" + op + ", linglang_rt:read(" + cell + "), 1))")
+	case "IfStmt":
+		if childAt(node, 0).kind != "nil" {
+			emitFail(e, node.at, "bootstrap emitter does not support if initializers")
+		}
+		condition := emitScope(emitExpression(e, childAt(node, 1), false))
+		body := emitStatement(e, childAt(node, 2))
+		other := emitStatement(e, childAt(node, 3))
+		return "case " + condition + " of true -> " + body + "; false -> " + other + " end"
+	}
+	emitFail(e, node.at, "bootstrap emitter does not support statement "+node.kind)
+	return ""
+}

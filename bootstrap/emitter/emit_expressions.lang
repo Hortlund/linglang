@@ -1,0 +1,250 @@
+package main
+
+func emitOperator(operator string) string {
+	switch operator {
+	case "+":
+		return "add"
+	case "-":
+		return "sub"
+	case "*":
+		return "mul"
+	case "/":
+		return "divide"
+	case "%":
+		return "remain"
+	case "&":
+		return "bit_and"
+	case "|":
+		return "bit_or"
+	case "^":
+		return "bit_xor"
+	case "&^":
+		return "bit_clear"
+	case "<<":
+		return "shift_left"
+	case ">>":
+		return "shift_right"
+	case "==":
+		return "eq"
+	case "!=":
+		return "ne"
+	case "<":
+		return "lt"
+	case "<=":
+		return "le"
+	case ">":
+		return "gt"
+	case ">=":
+		return "ge"
+	}
+	return ""
+}
+
+func emitConstant(e *Emitter, node SyntaxNode, value ConstantValue) string {
+	switch value.kind {
+	case "int":
+		if integerBits(value.integer) > 64 {
+			emitFail(e, node.at, "constant does not fit a runtime integer")
+			return ""
+		}
+		// Decimal printing also supports unsigned constants in shift counts.
+		remaining := value.integer
+		remaining.negative = false
+		text := ""
+		for head(remaining.digits).ok {
+			division := integerDivide(remaining, integerSmall(10))
+			text = formatInt(integerToInt(division.remainder)) + text
+			remaining = division.quotient
+		}
+		if text == "" {
+			text = "0"
+		}
+		if value.integer.negative {
+			text = "-" + text
+		}
+		return text
+	case "bool":
+		if value.boolean {
+			return "true"
+		}
+		return "false"
+	case "string":
+		if constantStringLength(value) > 1048576 {
+			emitFail(e, node.at, "bootstrap emitter string literal exceeds 1 MiB")
+			return ""
+		}
+		return emitBinaryString(constantStringBytes(value))
+	}
+	emitFail(e, node.at, "unsupported constant")
+	return ""
+}
+
+// Every operand is evaluated once, in source order, with a temporary root.
+func emitOrdered(e *Emitter, codes List[string], target string) string {
+	var setup List[string]
+	var values List[string]
+	for _, code := range codes {
+		value := emitFresh(e)
+		setup = append(setup, value+" = "+code)
+		setup = append(setup, "linglang_rt:keep("+value+")")
+		values = append(values, value)
+	}
+	if len(target) >= 4 && slice(target, 0, 4) == "fun(" {
+		target = "(" + target + ")"
+	}
+	setup = append(setup, target+"("+join(values, ", ")+")")
+	return "(begin " + join(setup, ", ") + " end)"
+}
+
+func emitShiftCount(e *Emitter, node SyntaxNode) string {
+	value := emitValue(e, node)
+	unsigned := untypedInteger(value.typeID)
+	code := emitExpression(e, node, unsigned)
+	if unsigned {
+		return "((" + code + ") band 18446744073709551615)"
+	}
+	return code
+}
+
+func emitExpression(e *Emitter, node SyntaxNode, unsigned bool) string {
+	if e.reason != "" {
+		return ""
+	}
+	e.depth++
+	if e.depth > 128 {
+		emitFail(e, node.at, "bootstrap emission nesting exceeds 128 levels")
+		e.depth--
+		return ""
+	}
+	code := emitExpressionInner(e, node, unsigned)
+	e.depth--
+	return code
+}
+
+func emitExpressionInner(e *Emitter, node SyntaxNode, unsigned bool) string {
+	value := emitValue(e, node)
+	if value.constant.kind != "" {
+		return emitConstant(e, node, value.constant)
+	}
+	// A typed expression keeps its own context even inside an unsigned count.
+	unsigned = unsigned && untypedInteger(value.typeID)
+	switch node.kind {
+	case "ParenExpr":
+		return emitExpression(e, childAt(node, 0), unsigned)
+	case "Ident":
+		return "linglang_rt:read(" + emitCell(e, node, false) + ")"
+	case "UnaryExpr":
+		x := emitExpression(e, childAt(node, 0), unsigned)
+		switch node.text {
+		case "+":
+			return x
+		case "-":
+			return "linglang_rt:binary(sub, 0, " + x + ")"
+		case "^":
+			return "linglang_rt:binary(bit_xor, " + x + ", -1)"
+		case "!":
+			return "(not (" + x + "))"
+		}
+	case "BinaryExpr":
+		left := emitExpression(e, childAt(node, 0), unsigned)
+		right := ""
+		if node.text == "<<" || node.text == ">>" {
+			right = emitShiftCount(e, childAt(node, 1))
+		} else {
+			right = emitExpression(e, childAt(node, 1), unsigned)
+		}
+		if node.text == "&&" {
+			return "((" + left + ") andalso (" + right + "))"
+		}
+		if node.text == "||" {
+			return "((" + left + ") orelse (" + right + "))"
+		}
+		op := emitOperator(node.text)
+		if unsigned && (node.text == "/" || node.text == "%" || node.text == ">>") {
+			op += "_unsigned"
+		}
+		return emitOrdered(e, List[string]{left, right}, "fun(A, B) -> linglang_rt:binary("+op+", A, B) end")
+	case "CallExpr":
+		return emitCall(e, node)
+	}
+	emitFail(e, node.at, "bootstrap emitter does not support expression "+node.kind)
+	return ""
+}
+
+func emitCall(e *Emitter, node SyntaxNode) string {
+	callee := childAt(node, 0)
+	if callee.kind != "Ident" || node.text != "" {
+		emitFail(e, node.at, "bootstrap emitter supports only direct non-variadic calls")
+		return ""
+	}
+	function := emitValue(e, callee)
+	var codes List[string]
+	for _, argument := range tail(node.children) {
+		codes = append(codes, emitExpression(e, argument, false))
+	}
+	if function.kind == "type" {
+		if function.typeID == tInt || function.typeID == tBool || function.typeID == tString && emitValue(e, childAt(node, 1)).typeID == tString {
+			return head(codes).value
+		}
+		emitFail(e, node.at, "bootstrap emitter does not support this runtime conversion")
+		return ""
+	}
+	if function.kind == "func" {
+		return emitOrdered(e, codes, emitFunctionName(callee.text))
+	}
+	if function.kind == "intrinsic" {
+		switch function.name {
+		case "print", "println":
+			newline := "false"
+			if function.name == "println" {
+				newline = "true"
+			}
+			// Operand names are gathered separately because print accepts a list.
+			var setup List[string]
+			var values List[string]
+			for _, code := range codes {
+				name := emitFresh(e)
+				setup = append(setup, name+" = "+code)
+				setup = append(setup, "linglang_rt:keep("+name+")")
+				values = append(values, name)
+			}
+			setup = append(setup, "linglang_rt:print(["+join(values, ", ")+"], "+newline+")")
+			return "(begin " + join(setup, ", ") + " end)"
+		case "panic":
+			if defaultType(emitValue(e, childAt(node, 1)).typeID) != tString {
+				emitFail(e, node.at, "panic requires a string reason")
+			}
+			return "erlang:error({linglang_panic, " + head(codes).value + "})"
+		case "len":
+			if defaultType(emitValue(e, childAt(node, 1)).typeID) == tString {
+				return "byte_size(" + head(codes).value + ")"
+			}
+		}
+	}
+	if function.kind == "native" {
+		target := ""
+		switch function.name {
+		case "formatInt":
+			target = "linglang_rt:format_int"
+		case "trim":
+			target = "linglang_rt:text_trim"
+		case "byteAt":
+			target = "linglang_rt:text_byte"
+		case "slice":
+			target = "linglang_rt:text_slice"
+		case "isLetter":
+			target = "linglang_rt:unicode_letter"
+		case "isDigit":
+			target = "linglang_rt:unicode_digit"
+		case "assert":
+			codes = append(codes, emitBinaryString(node.at.filename))
+			codes = append(codes, formatInt(node.at.line))
+			target = "linglang_rt:assert_value"
+		}
+		if target != "" {
+			return emitOrdered(e, codes, target)
+		}
+	}
+	emitFail(e, node.at, "bootstrap emitter does not support call "+callee.text)
+	return ""
+}

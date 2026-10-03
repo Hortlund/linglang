@@ -13,11 +13,11 @@ func parseField(p *Parser) SyntaxNode {
 	at := p.current
 	names := parseNames(p)
 	typ := parseType(p)
-	return syntax("Field", at, "", List[SyntaxNode]{syntax("Names", at, "", names), typ})
+	return parserSyntax(p, "Field", at, "", List[SyntaxNode]{parserSyntax(p, "Names", at, "", names), typ})
 }
 
-func parameterField(typ SyntaxNode) SyntaxNode {
-	return syntax("Field", typ.at, "", List[SyntaxNode]{syntax("Names", typ.at, "", nil), typ})
+func parameterField(p *Parser, typ SyntaxNode) SyntaxNode {
+	return parserSyntax(p, "Field", typ.at, "", List[SyntaxNode]{parserSyntax(p, "Names", typ.at, "", nil), typ})
 }
 
 // A comma can separate parameters or grouped names. Resolve the group when a
@@ -47,11 +47,11 @@ func parseParameters(p *Parser, opening Token) SyntaxNode {
 				}
 			}
 			typ := parseType(p)
-			reversed = prepend(syntax("Field", first.at, "", List[SyntaxNode]{syntax("Names", first.at, "", syntaxOrder(candidates)), typ}), reversed)
+			reversed = prepend(parserSyntax(p, "Field", first.at, "", List[SyntaxNode]{parserSyntax(p, "Names", first.at, "", syntaxOrder(candidates)), typ}), reversed)
 		} else {
 			unnamed = true
 			for _, typ := range syntaxOrder(candidates) {
-				reversed = prepend(parameterField(typ), reversed)
+				reversed = prepend(parameterField(p, typ), reversed)
 			}
 		}
 		if named && unnamed {
@@ -62,7 +62,7 @@ func parseParameters(p *Parser, opening Token) SyntaxNode {
 		}
 	}
 	expect(p, ")")
-	return syntax("FieldList", opening, "", syntaxOrder(reversed))
+	return parserSyntax(p, "FieldList", opening, "", syntaxOrder(reversed))
 }
 
 func parseStruct(p *Parser) SyntaxNode {
@@ -74,8 +74,8 @@ func parseStruct(p *Parser) SyntaxNode {
 		statementEnd(p)
 	}
 	expect(p, "}")
-	fields := syntax("FieldList", opening, "", syntaxOrder(reversed))
-	return syntax("StructType", at, "", List[SyntaxNode]{fields})
+	fields := parserSyntax(p, "FieldList", opening, "", syntaxOrder(reversed))
+	return parserSyntax(p, "StructType", at, "", List[SyntaxNode]{fields})
 }
 
 func parseFunction(p *Parser) SyntaxNode {
@@ -89,7 +89,7 @@ func parseFunction(p *Parser) SyntaxNode {
 		if accept(p, "(") {
 			results = parseParameters(p, opening)
 		} else {
-			results = syntax("FieldList", opening, "", List[SyntaxNode]{parameterField(parseType(p))})
+			results = parserSyntax(p, "FieldList", opening, "", List[SyntaxNode]{parameterField(p, parseType(p))})
 		}
 		if len(results.children) > 1 {
 			parseFail(p, "multiple return values are not supported")
@@ -101,7 +101,7 @@ func parseFunction(p *Parser) SyntaxNode {
 		}
 	}
 	body := parseBlock(p)
-	return syntax("FuncDecl", at, "", List[SyntaxNode]{name, params, results, body})
+	return parserSyntax(p, "FuncDecl", at, "", List[SyntaxNode]{name, params, results, body})
 }
 
 func parseDeclaration(p *Parser, local bool) SyntaxNode {
@@ -129,7 +129,7 @@ func parseDeclaration(p *Parser, local bool) SyntaxNode {
 				parseFail(p, "type declarations require a non-generic struct")
 			}
 			typ := parseType(p)
-			spec = syntax("TypeSpec", start, "", List[SyntaxNode]{name, typ})
+			spec = parserSyntax(p, "TypeSpec", start, "", List[SyntaxNode]{name, typ})
 		} else {
 			names := parseNames(p)
 			typ := noSyntax()
@@ -147,7 +147,7 @@ func parseDeclaration(p *Parser, local bool) SyntaxNode {
 					parseFail(p, "constant declaration needs a value")
 				}
 			}
-			spec = syntax("ValueSpec", start, "", List[SyntaxNode]{syntax("Names", start, "", names), typ, syntax("Values", start, "", values)})
+			spec = parserSyntax(p, "ValueSpec", start, "", List[SyntaxNode]{parserSyntax(p, "Names", start, "", names), typ, parserSyntax(p, "Values", start, "", values)})
 		}
 		reversed = prepend(spec, reversed)
 		if !group {
@@ -160,5 +160,5 @@ func parseDeclaration(p *Parser, local bool) SyntaxNode {
 	if group {
 		expect(p, ")")
 	}
-	return syntax("GenDecl", at, at.kind, syntaxOrder(reversed))
+	return parserSyntax(p, "GenDecl", at, at.kind, syntaxOrder(reversed))
 }

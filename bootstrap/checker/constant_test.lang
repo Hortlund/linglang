@@ -1,0 +1,244 @@
+package main
+
+func TestIntegerArithmetic() {
+	assert(integerToInt(integerSmall(-9223372036854775808)) == -9223372036854775808)
+	assert(integerToInt(integerSmall(9223372036854775807)) == 9223372036854775807)
+	big := integerShiftLeft(integerSmall(1), 200)
+	near := integerAdd(big, integerSmall(123))
+	assert(integerCompare(integerAdd(near, integerNegate(big)), integerSmall(123)) == 0)
+	product := integerMultiply(near, integerAdd(big, integerSmall(7)))
+	division := integerDivide(product, near)
+	assert(integerCompare(division.quotient, integerAdd(big, integerSmall(7))) == 0)
+	assert(!head(division.remainder.digits).ok)
+	for a := -13; a <= 13; a++ {
+		for b := -3; b <= 3; b++ {
+			x := integerSmall(a)
+			y := integerSmall(b)
+			assert(integerToInt(integerAdd(x, y)) == a+b)
+			assert(integerToInt(integerMultiply(x, y)) == a*b)
+			assert(integerToInt(integerBitwise(x, y, "&")) == a&b)
+			assert(integerToInt(integerBitwise(x, y, "|")) == a|b)
+			assert(integerToInt(integerBitwise(x, y, "^")) == a^b)
+			assert(integerToInt(integerBitwise(x, y, "&^")) == a&^b)
+			if b != 0 {
+				d := integerDivide(x, y)
+				assert(integerToInt(d.quotient) == a/b)
+				assert(integerToInt(d.remainder) == a%b)
+			}
+		}
+		for count := 0; count < 7; count++ {
+			assert(integerToInt(integerShiftRight(integerSmall(a), count)) == a>>count)
+		}
+	}
+}
+
+func TestConstantValues() {
+	for _, source := range (List[string]{
+		"const Large=1<<200;const N=(Large+17)-Large;func f()int{return N}",
+		"const Min=-9223372036854775808;func f()int{return Min}",
+		"const (A=iota;B;C=A+iota);func f(){const(D=iota+3;E);println(A,B,C,D,E)}",
+		"const N=len(\"雪\\x00\\xff\");func f(){println(N,string(0x1f600),int('雪'))}",
+		"func f(){n:=1;println(n<<63,n>>18446744073709551615)}",
+	}) {
+		assert(checkedSource(source).ok)
+	}
+	for _, source := range (List[string]{
+		"const N int=9223372036854775808",
+		"func f(){n:=9223372036854775808;println(n)}",
+		"func f(){_ = 1<<100}",
+		"func f(){println(1<<100)}",
+		"const N=1/0",
+		"func f(x int){println(x%0)}",
+		"const N=1<<512",
+		"const N=0<<1075",
+		"func f(x int){println(x<<-1)}",
+		"const N int=9223372036854775807;const Bad=N+1",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+}
+
+func TestConstantLenTypes() {
+	for _, source := range (List[string]{
+		"func f(){n:=len(\"x\")+'a';println(n)}",
+		"func f(){n:='a'+len(\"x\");println(n)}",
+		"const N=len(\"x\");func f(){n:=N+'a';println(n)}",
+		"func f(n int){println(1<<(len(\"x\")<<n))}",
+		"func f(){n:=len(\"x\")+(1<<62);println(n)}",
+	}) {
+		assert(checkedSource(source).ok)
+	}
+	for _, source := range (List[string]{
+		"const N=len(\"x\");const Huge=N<<100",
+		"const Huge=len(\"x\")<<100",
+		"const S string=\"a\";const Huge=len(S)<<100",
+		"const Huge=len(\"x\")+(1<<63)",
+		"func f(n int){x:=1;println(x<<((len(\"x\")<<n)+(1<<63)))}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+}
+
+func TestConstantKeysAndSizes() {
+	for _, source := range (List[string]{
+		"func f(){const A=1+1;println(Map[int,int]{A:1,2:3})}",
+		"func f(){println(Map[string,int]{\"a\":1,\"\\x61\":2})}",
+		"func f(){println(List[int]{1:2,1:3})}",
+		"func f(){println(List[int]{1:2,0:3,4})}",
+		"func f(n int){println(List[int]{n:1})}",
+		"func f(){println(List[int]{-1:1})}",
+		"func f(n int){switch n{case 1+1:case 2:}}",
+		"func f(s string){switch s{case \"a\":case \"\\x61\":}}",
+		"func f(){println(make(List[int],-1))}",
+		"func f(){println(make(List[int],3,2))}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+	assert(checkedSource("func f(n int){println(Map[int,int]{n:1,n:2});switch{case true:case true:};println(make(List[int],2,3))}").ok)
+}
+
+func TestContextualRuntimeShifts() {
+	for _, source := range (List[string]{
+		"func f(n int){var x int=('a'+(1<<40))<<n;println(x)}",
+		"func f(n int)int{return ('a'+(1<<40))>>n}",
+		"func take(x int){};func f(n int){take(('a'+(1<<40))<<n)}",
+		"func f(n int){x:=0;x=('a'+(1<<40))<<n;println(x)}",
+		"func f(n int){println(int(('a'+(1<<40))<<n))}",
+		"func f(n int){var x int=1+(('a'+(1<<40))<<n);println(x)}",
+		"func f(n int){var x int=-(('a'+(1<<40))<<n);println(x)}",
+		"func f(n int){x:=1;println((('a'+(1<<40))<<n)==x)}",
+		"func f(n int){println(List[int]{('a'+(1<<40))<<n},string(int(1<<n)),string(n))}",
+		"func f(n int){x:=1;println(x<<(('a'+(1<<40))<<n),x<<((1<<63)<<n))}",
+	}) {
+		assert(checkedSource(source).ok)
+	}
+	for _, source := range (List[string]{
+		"func f(n int){println(('a'+(1<<40))<<n)}",
+		"func f(n int){var x int=(1<<100)<<n;println(x)}",
+		"func f(n int){var x int=0*((1<<100)<<n);println(x)}",
+		"func f(n int){var x int=-((1<<63)<<n);println(x)}",
+		"func f(n int){println(((1<<100)<<n)==0)}",
+		"func f(n int){println(((1<<100)<<n)<0)}",
+		"func f(n int){println(string(1<<n))}",
+		"func f(n int){x:=1;println(x<<(-1<<n))}",
+		"func f(n int){x:=1;println(x<<((1<<64)<<n))}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+}
+
+func TestMixedRuntimeConstantRanges() {
+	for _, source := range (List[string]{
+		"func f(n int){var x int=(1<<n)+(1<<100);println(x)}",
+		"func f(n int){var x int=(1<<100)+(1<<n);println(x)}",
+		"func f(n int){var x int=((1<<n)+(1<<100))*0;println(x)}",
+		"func f(n int){var x int=(1<<n)/(1<<100);println(x)}",
+		"func f(n int){println(int(-((1<<n)+(1<<100))))}",
+		"func f(n int){println(((1<<n)+(1<<100))==0)}",
+		"const Huge=1<<100;func f(n int)int{return (1<<n)+Huge}",
+		"func f(n int){x:=1;println(x<<((1<<n)+(1<<64)))}",
+		"func f(n int){x:=1;println(x<<((1<<64)+(1<<n)))}",
+		"func f(n int){x:=1;println(x<<((1<<n)/(1<<64)))}",
+		"func f(n int){x:=1;println(x<<((1<<n)+(-1)))}",
+		"func f(n int){x:=1;x<<=(1<<n)+(1<<64)}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+	for _, source := range (List[string]{
+		"func f(n int){var x int=(1<<n)+((1<<100)-(1<<100));println(x)}",
+		"func f(n int){var x int=1+(('a'+(1<<40))<<n);println(x)}",
+		"func f(n int){x:=1;println(x<<((1<<n)+(1<<63)))}",
+		"func f(n int){x:=1;println(x<<(((1<<n)+18446744073709551615)>>63))}",
+		"func f(n int){x:=1;x<<=(1<<n)+((1<<100)-(1<<100))}",
+	}) {
+		assert(checkedSource(source).ok)
+	}
+	parsed := parse("range.lang", "package main\nfunc f(n int){var x int=(1<<n)+(1<<100);println(x)}")
+	result := checkPackage(List[SyntaxNode]{parsed.root})
+	assert(!result.ok && result.at.filename == "range.lang" && result.at.line == 2 && result.at.column == 32)
+}
+
+func stringDoublings(count int) string {
+	text := "const S0=\"x\";"
+	for i := 1; i <= count; i++ {
+		previous := "S" + formatInt(i-1)
+		text += "const S" + formatInt(i) + "=" + previous + "+" + previous + ";"
+	}
+	return text
+}
+
+func stringOfConstantLength(size int) string {
+	expression := "\"\""
+	for bit := 30; bit >= 0; bit-- {
+		if size&(1<<bit) != 0 {
+			expression += "+S" + formatInt(bit)
+		}
+	}
+	return stringDoublings(30) + "const Value=" + expression + ";"
+}
+
+func TestLargeStringConstants() {
+	base := stringDoublings(30)
+	parsed := parse("fixture.lang", "package main\n"+base+"const Value=len(S30);const Same=S30==S30;const Less=(S30+\"a\")<(S30+\"b\");const Different=(S30+\"a\")!=(S30+\"b\");")
+	assert(parsed.ok)
+	result := checkPackage(List[SyntaxNode]{parsed.root})
+	assert(result.ok)
+	assert(integerToInt(get(result.constants, "Value").value.integer) == 1<<30)
+	assert(get(result.constants, "Same").value.boolean && get(result.constants, "Less").value.boolean && get(result.constants, "Different").value.boolean)
+	assert(!checkedSource(stringDoublings(31)).ok)
+	boundary := parse("boundary.lang", "package main\n"+stringOfConstantLength(maxConstantStringBytes))
+	accepted := checkPackage(List[SyntaxNode]{boundary.root})
+	assert(accepted.ok)
+	assert(constantStringLength(get(accepted.constants, "Value").value) == maxConstantStringBytes)
+	assert(!checkedSource(stringOfConstantLength(maxConstantStringBytes + 1)).ok)
+	assert(!checkedSource(base + "func f(){println(Map[string,int]{S30:1,S30+\"\":2})}").ok)
+	assert(!checkedSource(base + "func f(s string){switch s{case S30:case S30+\"\":}}").ok)
+}
+
+func TestConstantStringChunks() {
+	c := Checker{}
+	node := SyntaxNode{}
+	value := constantString("ab")
+	text := "ab"
+	for i := 0; i < 13; i++ {
+		value = concatenateConstantStrings(&c, node, value, value)
+		text += text
+	}
+	assert(c.reason == "")
+	assert(constantStringBytes(value) == text)
+	splitValue := concatenateConstantStrings(&c, node, constantString(slice(text, 0, 3)), constantString(slice(text, 3, len(text))))
+	assert(compareConstantStrings(value, splitValue) == 0)
+	assert(compareConstantStrings(value, constantString("")) > 0)
+	assert(compareConstantStrings(constantString(""), value) < 0)
+	assert(compareConstantStrings(value, concatenateConstantStrings(&c, node, value, constantString("a"))) < 0)
+	assert(compareConstantStrings(concatenateConstantStrings(&c, node, value, constantString("a")), value) > 0)
+	assert(compareConstantStrings(value, constantString("c")) < 0)
+	assert(compareConstantStrings(value, constantString("aa")) > 0)
+}
+
+func TestRuntimeRuneContexts() {
+	for _, source := range (List[string]{
+		"func f(n int){var x int='a'<<n;println(x)}",
+		"func f(n int)int{return 'a'<<n}",
+		"func take(x int){};func f(n int){take('a'<<n)}",
+		"func f(n int){x:=1;println(('a'<<n)==x,('a'<<n)+len(\"\"),x<<('a'<<n))}",
+		"func f(){println('a','a'<<2,'a'=='a')}",
+	}) {
+		assert(checkedSource(source).ok)
+	}
+	for _, source := range (List[string]{
+		"func f(n int){println('a'<<n)}",
+		"func f(n int){println('a'>>n)}",
+		"func f(n int){println(('a'<<n)==0)}",
+		"func f(n int){println(('a'<<n)<0)}",
+		"func f(n int){println(^('a'<<n))}",
+		"func f(n int){println(-('a'<<n))}",
+		"func f(n int){println(('a'<<n)+1)}",
+		"func f(n int){_ = 'a'<<n}",
+		"func f(n int){panic('a'<<n)}",
+		"func f(n int){send(self(),'a'<<n)}",
+	}) {
+		result := checkedSource(source)
+		assert(!result.ok && result.reason == "runtime rune expressions are unsupported; use an int context")
+	}
+}

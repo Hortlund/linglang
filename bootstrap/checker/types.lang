@@ -8,6 +8,8 @@ const (
 	tUntypedInt
 	tUntypedBool
 	tUntypedString
+	tUntypedRune
+	tRune
 	tNil
 	tVoid
 )
@@ -28,8 +30,9 @@ type CheckedType struct {
 }
 
 type CheckedBinding struct {
-	kind   string
-	typeID int
+	kind     string
+	typeID   int
+	constant ConstantValue
 }
 
 type TypeScope struct {
@@ -42,12 +45,26 @@ type CheckedValue struct {
 	typeID      int
 	addressable bool
 	kind        string
+	constant    ConstantValue
+	integers    List[DeferredInteger]
+}
+
+// Untyped runtime expressions acquire their integer type from the enclosing
+// context. Retain constant operands, including shifted operands, until then.
+type DeferredInteger struct {
+	at      Token
+	integer ConstantInteger
 }
 
 type CheckResult struct {
-	ok     bool
-	reason string
-	at     Token
+	expressions Map[string, CheckedValue]
+	definitions Map[string, CheckedBinding]
+	types       Map[int, CheckedType]
+	bindings    ResolveResult
+	ok          bool
+	reason      string
+	at          Token
+	constants   Map[string, ConstantValue]
 }
 
 type PendingConstant struct {
@@ -55,14 +72,20 @@ type PendingConstant struct {
 	value    SyntaxNode
 	declared SyntaxNode
 	at       Token
+	iota     int
 }
 
 type Checker struct {
+	record        bool
+	expressions   Map[string, CheckedValue]
+	definitions   Map[string, CheckedBinding]
 	native        *TypeScope
 	global        *TypeScope
 	constants     Map[string, PendingConstant]
 	constantState Map[string, int]
 	constantDepth int
+	iota          int
+	literals      Map[string, ConstantValue]
 	types         Map[int, CheckedType]
 	interned      Map[string, int]
 	next          int
@@ -124,6 +147,8 @@ func defaultType(id int) int {
 		return tBool
 	case tUntypedString:
 		return tString
+	case tUntypedRune:
+		return tRune
 	}
 	return id
 }
@@ -132,7 +157,7 @@ func assignable(c *Checker, from int, to int) bool {
 	if from == tInvalid || to == tInvalid {
 		return false
 	}
-	if from == to || (from >= tUntypedInt && from <= tUntypedString && defaultType(from) == to) {
+	if from == to || (from >= tUntypedInt && from <= tUntypedString && defaultType(from) == to) || (untypedInteger(from) && (to == tInt || to == tRune || untypedInteger(to))) {
 		return true
 	}
 	if from == tNil {
@@ -146,6 +171,25 @@ func requireType(c *Checker, node SyntaxNode, value CheckedValue, expected int) 
 	if value.kind != "value" || !assignable(c, value.typeID, expected) {
 		checkFail(c, node.at, "incompatible value type")
 	}
+	if expected == tRune && value.constant.kind == "" {
+		checkFail(c, node.at, "runtime rune expressions are unsupported; use an int context")
+	}
+	if value.constant.kind == "int" && (expected == tInt || expected == tRune) {
+		if !integerFitsType(value.constant.integer, expected) {
+			checkFail(c, node.at, "constant overflows integer type")
+		}
+	}
+	if expected == tInt || expected == tRune {
+		for _, operand := range value.integers {
+			if !integerFitsType(operand.integer, expected) {
+				checkFail(c, operand.at, "constant operand overflows integer type")
+			}
+		}
+	}
+}
+
+func integerFitsType(value ConstantInteger, expected int) bool {
+	return integerFitsInt(value) && (expected != tRune || (integerCompare(value, integerSmall(-2147483648)) >= 0 && integerCompare(value, integerSmall(2147483647)) <= 0))
 }
 
 func typeSyntax(c *Checker, scope *TypeScope, node SyntaxNode) int {
@@ -205,4 +249,14 @@ func fieldType(c *Checker, id int, name string) int {
 		}
 	}
 	return tInvalid
+}
+
+func sourceIdentity(at Token) string { return quotedText(at.filename) + ":" + formatInt(at.offset) }
+func expressionIdentity(node SyntaxNode) string {
+	return quotedText(node.at.filename) + ":" + formatInt(node.id)
+}
+func rememberDefinition(c *Checker, scope *TypeScope, node SyntaxNode) {
+	if c.record && node.text != "_" {
+		c.definitions = put(c.definitions, sourceIdentity(node.at), typedName(scope, node.text).value)
+	}
 }

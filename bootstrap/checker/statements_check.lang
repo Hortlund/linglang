@@ -39,11 +39,18 @@ func checkAssignment(c *Checker, scope *TypeScope, node SyntaxNode) {
 			if value.kind != "value" || value.typeID == tVoid || value.typeID == tNil {
 				checkFail(c, target.at, "blank assignment requires a concrete value")
 			}
+			requireType(c, target, value, defaultType(value.typeID))
 		} else if node.text == ":=" && !get(scope.names, target.text).ok {
 			if value.kind != "value" || value.typeID == tVoid || value.typeID == tNil {
 				checkFail(c, target.at, "cannot infer a variable type")
 			}
-			bindType(scope, target.text, "var", defaultType(value.typeID))
+			id := defaultType(value.typeID)
+			if id == tRune {
+				checkFail(c, target.at, "rune variables are unsupported; use int")
+			}
+			requireType(c, target, value, id)
+			bindType(scope, target.text, "var", id)
+			rememberDefinition(c, scope, target)
 		} else {
 			variable := assignmentTarget(c, scope, target)
 			if node.text != "=" && node.text != ":=" {
@@ -157,6 +164,7 @@ func checkStatement(c *Checker, scope *TypeScope, node SyntaxNode, result int) {
 		if tag.kind != "nil" {
 			value := checkExpression(c, &block, tag, tInvalid)
 			id = defaultType(value.typeID)
+			requireType(c, tag, value, id)
 			if value.kind != "value" || id == tNil || id == tVoid {
 				checkFail(c, tag.at, "switch requires a value")
 			}
@@ -166,10 +174,22 @@ func checkStatement(c *Checker, scope *TypeScope, node SyntaxNode, result int) {
 				checkFail(c, tag.at, "switch type is not comparable")
 			}
 		}
+		seenCases := ConstantKeys{}
+		defaultSeen := false
 		for _, clause := range childAt(node, 2).children {
+			if len(childAt(clause, 0).children) == 0 {
+				if defaultSeen {
+					checkFail(c, clause.at, "duplicate default case")
+				}
+				defaultSeen = true
+			}
 			for _, value := range childAt(clause, 0).children {
 				checked := checkExpression(c, &block, value, id)
 				requireType(c, value, checked, id)
+				seenCases = recordConstantKey(seenCases, checked.constant)
+				if seenCases.duplicate {
+					checkFail(c, value.at, "duplicate constant switch case")
+				}
 				comparison := SyntaxNode{at: value.at, text: "=="}
 				binaryValues(c, comparison, expressionValue(id), checked)
 			}

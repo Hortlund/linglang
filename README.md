@@ -84,6 +84,16 @@ it set out to do.
 
 there are no floats. decimals were a mistake.
 
+bitwise `&`, `|`, `^`, and `&^` work, including compound assignments.
+`<<` and `>>` shift signed integers. shifting by 64 or more gives zero,
+except that a negative number shifted right stays at `-1`. untyped count
+expressions use unsigned 64-bit arithmetic; negative `int` counts fail the
+process. the bits have left the building.
+
+rune literals work as constants and in `int` contexts, like
+`var x int = 'a' << n`. runtime expressions that default to `rune` (32 bits)
+are rejected. give the rune an `int` job before it starts moving bits.
+
 `bool` is `true` or `false`. for a third opinion, start another process.
 
 `string` stores bytes, including UTF-8 text. it does not know what the text means.
@@ -543,11 +553,11 @@ func TestMath() {
 
 ```sh
 go run ./cmd/linglang test bootstrap/checker
-go run ./cmd/linglang test --no-opt --gc-stress --gc-stats bootstrap/checker
-go run ./cmd/linglang test --timeout 5s bootstrap/checker
+go run ./cmd/linglang test --no-opt --gc-stress --gc-stats --timeout 5m bootstrap/checker
+go run ./cmd/linglang test --timeout 5s examples/bean_tests
 ```
 
-these commands run the linglang type checker tests. the checker checks the
+these commands run the linglang checker and bean tests. the checker checks the
 checker. somebody has to.
 
 `test` loads the immediate `.lang` files in one directory, including `_test.lang`.
@@ -568,6 +578,8 @@ the default timeout is 30 seconds per test, including VM startup and shutdown;
 `--timeout` accepts positive durations such as `5s` or `500ms`. a timeout kills
 the test VM, reports failure, and runs the next test. failures produce a nonzero
 exit status. a suite with no tests fails too. doing nothing is not passing.
+
+the larger bootstrap checker tests use `--timeout 5m` under GC stress.
 
 ## arrange the code
 
@@ -706,8 +718,8 @@ the type checker is written in linglang now. it can tell you that
 
 ```sh
 ./bin/linglang run bootstrap/checker examples/counter.lang
-./bin/linglang test --gc-stress --gc-stats bootstrap/checker
-./bin/linglang test --no-opt --gc-stress --gc-stats bootstrap/checker
+./bin/linglang test --gc-stress --gc-stats --timeout 5m bootstrap/checker
+./bin/linglang test --no-opt --gc-stress --gc-stats --timeout 5m bootstrap/checker
 ./bin/linglang fmt --check bootstrap/checker
 ./bin/linglang pack -o bin/linglang-checker bootstrap/checker
 ./bin/linglang-checker bootstrap/checker/*.lang
@@ -718,11 +730,59 @@ pointers, fields, literal keys, lists, maps, and native OTP call signatures.
 forward declarations work across files. the packed checker checks its own
 source with just Erlang/OTP installed. no Go hiding under the table.
 
-this is an early type pass. constant values and overflow, complete control-flow
-checks, and OTP message safety still need the seed compiler. `types ok` means
+constant evaluation is linglang code too. integer arithmetic keeps up to 512
+bits at compile time, then checks that values fit when used as runtime integers.
+`iota`, constant dependencies, string/rune escapes, comparisons, conversions,
+and `len` of constant strings work. duplicate constant map keys, list indices,
+and switch cases get diagnostics. bool switch cases can repeat. they have
+very little to say.
+
+constant strings keep shared chunks when they grow. `len` does not need a
+gigabyte allocation to count a gigabyte. values above 2,000,000,000 bytes get
+a diagnostic before concatenation.
+
+this is still an early type pass. complete control-flow checks and OTP message
+safety still need the seed compiler. `types ok` means
 this pass succeeded; it does not promise the seed can compile the program.
-Erlang emission and the compiler-builds-itself proof are still ahead.
 the runtime and OTP stay underneath.
+
+linglang can now emit Erlang for a small executable subset. the compiler has
+entered the chat. it brought 55 beans and a recursion problem.
+
+```sh
+./bin/linglang pack -o bin/linglang-emitter bootstrap/emitter
+mkdir -p _build/bootstrap-demo
+cp internal/compiler/runtime.erl _build/bootstrap-demo/linglang_rt.erl
+cp internal/compiler/supervision.erl _build/bootstrap-demo/linglang_sup.erl
+./bin/linglang-emitter examples/bootstrap_demo/*.lang > _build/bootstrap-demo/linglang_program.erl
+erlc -o _build/bootstrap-demo _build/bootstrap-demo/*.erl
+erl -noshell -pa _build/bootstrap-demo -eval 'linglang_program:main(), halt().'
+```
+
+once the emitter is packed, those compilation and execution steps need only
+Erlang/OTP. source goes through the linglang lexer, parser, resolver, type checker,
+and emitter. the existing runtime still handles managed cells and GC scopes.
+no Go sneaking into the compilation step wearing a fake moustache.
+
+pass explicit source files from one package. functions, recursion, primitive
+`int`/`bool`/`string` variables, constants, arithmetic, bitwise operations, direct
+calls, returns, blocks, and `if`/`else` work. so do printing, string `len`,
+`formatInt`, `trim`, `byteAt`, `slice`, `isLetter`, `isDigit`, `assert`, and string
+`panic`. the emitter sorts files, retains checked expression types and bindings,
+and rejects unsupported constructs with source locations before printing a module.
+
+loops, switches, structs, pointers, collections, OTP calls,
+multiple assignment, and `if` initializers still need the seed backend. runtime
+conversions support identity casts only; variable declarations need one named
+variable per spec. embedded constant strings are capped
+at 1 MiB and expression nesting at 128 levels. compiling the compiler itself
+is the next boss fight; this emitter cannot compile its own source yet.
+
+```sh
+./bin/linglang test --gc-stress --gc-stats --timeout 2m bootstrap/emitter
+./bin/linglang test --no-opt --gc-stress --gc-stats --timeout 2m bootstrap/emitter
+./bin/linglang fmt --check bootstrap/emitter examples/bootstrap_demo
+```
 
 ## why
 

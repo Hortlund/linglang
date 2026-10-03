@@ -37,6 +37,18 @@ func typeConfig() types.Config {
 	return types.Config{GoVersion: "go1.23", Sizes: types.SizesFor("gc", "amd64")}
 }
 
+// Constant runes and shifts acquiring an int or uint64 context are supported.
+// The runtime only implements 64-bit arithmetic, so defaulted int32 expressions
+// must be rejected before lowering, including when nested inside comparisons.
+func (c *compiler) runtimeRune(expr ast.Expr) bool {
+	value := c.info.Types[expr]
+	if !value.IsValue() || value.Value != nil || value.Type == nil {
+		return false
+	}
+	basic, ok := value.Type.Underlying().(*types.Basic)
+	return ok && basic.Kind() == types.Int32
+}
+
 // Analyze checks in-memory package sources and keeps partial syntax trees for
 // editor outlines. It needs no main function, emits no code, and starts no VM.
 // Type analysis resumes after syntax errors are repaired to avoid cascades.
@@ -94,6 +106,10 @@ func Analyze(sources []SourceFile) Analysis {
 	// BEAM/message restrictions are still enforced by the compiler at build time.
 	for _, file := range files {
 		ast.Inspect(file, func(node ast.Node) bool {
+			if expr, ok := node.(ast.Expr); ok && c.runtimeRune(expr) {
+				add(expr.Pos(), "runtime rune expressions are unsupported; use an int context")
+				return false
+			}
 			switch n := node.(type) {
 			case *ast.FuncDecl:
 				if n.Recv != nil || n.Type.TypeParams != nil {

@@ -73,6 +73,7 @@ func functionType(c *Checker, scope *TypeScope, declaration SyntaxNode) int {
 
 func checkValues(c *Checker, scope *TypeScope, declaration SyntaxNode) {
 	previous := noSyntax()
+	index := 0
 	for _, spec := range declaration.children {
 		values := childAt(spec, 2)
 		typeNode := childAt(spec, 1)
@@ -90,6 +91,7 @@ func checkValues(c *Checker, scope *TypeScope, declaration SyntaxNode) {
 			expected = typeSyntax(c, scope, typeNode)
 		}
 		if declaration.text == "const" {
+			c.iota = index
 			c.constantDepth++
 		}
 		var reversed List[CheckedValue]
@@ -109,8 +111,9 @@ func checkValues(c *Checker, scope *TypeScope, declaration SyntaxNode) {
 		}
 		for _, name := range names {
 			id := expected
+			value := CheckedValue{}
 			if head(checked).ok {
-				value := head(checked).value
+				value = head(checked).value
 				if expected != tInvalid {
 					requireType(c, name, value, expected)
 				} else {
@@ -124,14 +127,29 @@ func checkValues(c *Checker, scope *TypeScope, declaration SyntaxNode) {
 			if id == tInvalid {
 				checkFail(c, name.at, "declaration needs a type or value")
 			}
-			if declaration.text == "const" && defaultType(id) != tInt && defaultType(id) != tBool && defaultType(id) != tString {
+			if declaration.text == "const" && !integerType(id) && defaultType(id) != tBool && defaultType(id) != tString {
 				checkFail(c, name.at, "constant requires int, bool, or string")
 			}
 			if declaration.text != "const" {
 				id = defaultType(id)
+				if id == tRune {
+					checkFail(c, name.at, "rune variables are unsupported; use int")
+				}
+				if value.kind != "" {
+					requireType(c, name, value, id)
+				}
 			}
-			bindType(scope, name.text, declaration.text, id)
+			if declaration.text == "const" {
+				if value.constant.kind == "" {
+					checkFail(c, name.at, "constant requires a constant expression")
+				}
+				bindConstant(scope, name.text, id, value.constant)
+			} else {
+				bindType(scope, name.text, declaration.text, id)
+			}
+			rememberDefinition(c, scope, name)
 		}
+		index++
 	}
 }
 
@@ -146,21 +164,25 @@ func checkFunction(c *Checker, scope *TypeScope, declaration SyntaxNode) {
 		}
 		for _, name := range names {
 			bindType(&functionScope, name.text, "param", head(params).value)
+			rememberDefinition(c, &functionScope, name)
 			params = tail(params)
 		}
 	}
 	checkStatements(c, &functionScope, childAt(declaration, 3).children, signature.result)
 }
 
-// This is a type pass, not the final compiler. Constant evaluation and complete
-// flow/OTP message-safety checking remain with the seed while bootstrapping.
-func checkPackage(files List[SyntaxNode]) CheckResult {
+// This is a type pass, not the final compiler. Complete flow/OTP message-safety
+// checking remain with the seed while bootstrapping.
+func checkPackage(files List[SyntaxNode]) CheckResult { return checkPackageInfo(files, false) }
+
+// Emission requests metadata; standalone checks avoid retaining every expression.
+func checkPackageInfo(files List[SyntaxNode], record bool) CheckResult {
 	bindings := resolve(files)
 	if !bindings.ok {
 		return CheckResult{reason: bindings.reason, at: bindings.at}
 	}
-	c := Checker{next: tVoid}
-	for _, id := range (List[int]{tInt, tBool, tString, tUntypedInt, tUntypedBool, tUntypedString, tNil, tVoid}) {
+	c := Checker{next: tVoid, record: record}
+	for _, id := range (List[int]{tInt, tBool, tString, tUntypedInt, tUntypedBool, tUntypedString, tUntypedRune, tRune, tNil, tVoid}) {
 		c.types = put(c.types, id, CheckedType{kind: "basic"})
 	}
 	native := TypeScope{}
@@ -191,6 +213,7 @@ func checkPackage(files List[SyntaxNode]) CheckResult {
 	for _, declaration := range declarations {
 		if declaration.kind == "FuncDecl" {
 			bindType(&scope, childAt(declaration, 0).text, "func", functionType(&c, &scope, declaration))
+			rememberDefinition(&c, &scope, childAt(declaration, 0))
 		}
 	}
 	for _, declaration := range declarations {
@@ -207,5 +230,19 @@ func checkPackage(files List[SyntaxNode]) CheckResult {
 			checkFunction(&c, &scope, declaration)
 		}
 	}
-	return CheckResult{ok: c.reason == "", reason: c.reason, at: c.at}
+	var constants Map[string, ConstantValue]
+	if c.reason == "" {
+		for _, declaration := range declarations {
+			if declaration.kind == "GenDecl" && declaration.text == "const" {
+				for _, spec := range declaration.children {
+					for _, name := range childAt(spec, 0).children {
+						if name.text != "_" {
+							constants = put(constants, name.text, typedName(&scope, name.text).value.constant)
+						}
+					}
+				}
+			}
+		}
+	}
+	return CheckResult{ok: c.reason == "", reason: c.reason, at: c.at, constants: constants, expressions: c.expressions, definitions: c.definitions, types: c.types, bindings: bindings}
 }

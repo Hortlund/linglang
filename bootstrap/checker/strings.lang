@@ -1,0 +1,135 @@
+package main
+
+// Match the seed's bound without allocating expanded strings just to check it.
+const maxConstantStringBytes = 2000000000
+const inlineConstantStringBytes = 4096
+
+type ConstantStringNode struct {
+	left  ConstantValue
+	right ConstantValue
+	size  int
+}
+
+func constantStringLength(value ConstantValue) int {
+	if value.rope != nil {
+		return value.rope.size
+	}
+	return len(value.text)
+}
+
+func concatenateConstantStrings(c *Checker, node SyntaxNode, a ConstantValue, b ConstantValue) ConstantValue {
+	left := constantStringLength(a)
+	right := constantStringLength(b)
+	if left > maxConstantStringBytes-right {
+		checkFail(c, node.at, "constant string exceeds size limit")
+		return ConstantValue{}
+	}
+	if left == 0 {
+		return b
+	}
+	if right == 0 {
+		return a
+	}
+	if left+right <= inlineConstantStringBytes {
+		return constantString(a.text + b.text)
+	}
+	return ConstantValue{kind: "string", rope: &ConstantStringNode{left: a, right: b, size: left + right}}
+}
+
+// Consumers that need actual bytes materialize once, rather than at every +.
+func constantStringBytes(value ConstantValue) string {
+	if value.rope == nil {
+		return value.text
+	}
+	pending := List[ConstantValue]{value}
+	var reversed List[string]
+	for head(pending).ok {
+		part := head(pending).value
+		pending = tail(pending)
+		if part.rope == nil {
+			reversed = prepend(part.text, reversed)
+		} else {
+			pending = prepend(part.rope.left, prepend(part.rope.right, pending))
+		}
+	}
+	var parts List[string]
+	for _, part := range reversed {
+		parts = prepend(part, parts)
+	}
+	return join(parts, "")
+}
+
+// Compare aligned chunks. Shared subtrees can be skipped in constant time,
+// including gigantic prefixes in expressions such as (S+"a") < (S+"b").
+func compareConstantStrings(a ConstantValue, b ConstantValue) int {
+	as := List[ConstantValue]{a}
+	bs := List[ConstantValue]{b}
+	for head(as).ok && head(bs).ok {
+		x := head(as).value
+		y := head(bs).value
+		if (x.rope != nil && x.rope == y.rope) || (x.rope == nil && y.rope == nil && x.text == y.text) {
+			as = tail(as)
+			bs = tail(bs)
+		} else if x.rope != nil && (y.rope == nil || constantStringLength(x) >= constantStringLength(y)) {
+			as = prepend(x.rope.left, prepend(x.rope.right, tail(as)))
+		} else if y.rope != nil {
+			bs = prepend(y.rope.left, prepend(y.rope.right, tail(bs)))
+		} else {
+			n := len(x.text)
+			if len(y.text) < n {
+				n = len(y.text)
+			}
+			left := slice(x.text, 0, n)
+			right := slice(y.text, 0, n)
+			if left < right {
+				return -1
+			}
+			if left > right {
+				return 1
+			}
+			as = tail(as)
+			bs = tail(bs)
+			if n < len(x.text) {
+				as = prepend(constantString(slice(x.text, n, len(x.text))), as)
+			}
+			if n < len(y.text) {
+				bs = prepend(constantString(slice(y.text, n, len(y.text))), bs)
+			}
+		}
+	}
+	if head(as).ok {
+		return 1
+	}
+	if head(bs).ok {
+		return -1
+	}
+	return 0
+}
+
+type ConstantKeys struct {
+	small     Map[string, bool]
+	large     List[ConstantValue]
+	duplicate bool
+}
+
+// Large string keys retain their shared representation. Only small keys need
+// a flattened identity, so duplicate checking cannot allocate giant binaries.
+func recordConstantKey(keys ConstantKeys, value ConstantValue) ConstantKeys {
+	keys.duplicate = false
+	if value.kind == "string" && constantStringLength(value) > inlineConstantStringBytes {
+		for _, previous := range keys.large {
+			if constantStringLength(previous) == constantStringLength(value) && compareConstantStrings(previous, value) == 0 {
+				keys.duplicate = true
+				return keys
+			}
+		}
+		keys.large = prepend(value, keys.large)
+		return keys
+	}
+	key := constantIdentity(value)
+	if key != "" {
+		keys.duplicate = get(keys.small, key).ok
+		keys.small = put(keys.small, key, true)
+	}
+	return keys
+}

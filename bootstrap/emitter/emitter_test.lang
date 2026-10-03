@@ -1,0 +1,66 @@
+package main
+
+func TestCheckedMetadata() {
+	parsed := parse("metadata.lang", "package main\nfunc add(n int)int{x:=n+1+2+3;return x};func main(){println(add(4))}")
+	assert(parsed.ok)
+	var seen Map[int, bool]
+	pending := List[SyntaxNode]{parsed.root}
+	for head(pending).ok {
+		node := head(pending).value
+		pending = tail(pending)
+		if node.kind != "nil" {
+			assert(node.id > 0 && !get(seen, node.id).ok)
+			seen = put(seen, node.id, true)
+		}
+		for _, child := range node.children {
+			pending = prepend(child, pending)
+		}
+	}
+	checked := checkPackageInfo(List[SyntaxNode]{parsed.root}, true)
+	assert(checked.ok && len(checked.expressions) > 0 && len(checked.definitions) == 4)
+	function := head(tail(parsed.root.children)).value
+	declaration := head(childAt(function, 3).children).value
+	expression := head(childAt(declaration, 1).children).value
+	outer := get(checked.expressions, expressionIdentity(expression))
+	inner := get(checked.expressions, expressionIdentity(childAt(expression, 0)))
+	assert(outer.ok && inner.ok && outer.value.typeID == tInt && inner.value.typeID == tInt)
+}
+
+func TestEmitterBoundaries() {
+	for _, source := range (List[string]{
+		"func main(){for{break}}",
+		"func main(){n:=30;println('a'<<n)}",
+		"func main(){n:=30;println('a'>>n)}",
+		"func main(){n:=30;println(('a'<<n)==0)}",
+		"func main(){n:=30;println(('a'<<n)<0)}",
+		"func main(){n:=30;println(^('a'<<n))}",
+		"func main(){n:=30;println(-('a'<<n))}",
+		"func main(){n:=30;println(('a'<<n)+1)}",
+		"func main(){n:=30;_ = 'a'<<n}",
+		"func main(){n:=30;panic('a'<<n)}",
+
+		"func main(){if x:=1;x>0{println(x)}}",
+		"type N struct{x int};func main(){println(N{})}",
+		"func main(){x:=1;p:=&x;println(*p)}",
+		"func main(){println(List[int]{1})}",
+		"func f(n int)int{if n>0{return 1}};func main(){}",
+		"func main(){panic(1)}",
+		"func main(){startSupervisor(1,100)}",
+		"func main(){x,y:=1,2;println(x,y)}",
+		"func main(){switch{default:}}",
+	}) {
+		parsed := parse("unsupported.lang", "package main\n"+source)
+		assert(parsed.ok)
+		result := emitPackage(List[SyntaxNode]{parsed.root})
+		assert(!result.ok && result.module == "" && result.reason != "" && result.at.filename == "unsupported.lang")
+	}
+}
+
+func TestEmitterFileOrder() {
+	a := parse("a.lang", "package main\nfunc answer()int{return 42}")
+	b := parse("b.lang", "package main\nfunc main(){println(answer())}")
+	first := emitPackage(List[SyntaxNode]{a.root, b.root})
+	second := emitPackage(List[SyntaxNode]{b.root, a.root})
+	assert(first.ok && second.ok && first.module == second.module)
+	assert(!emitPackage(List[SyntaxNode]{a.root, a.root}).ok)
+}

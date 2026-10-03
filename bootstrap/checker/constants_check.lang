@@ -11,6 +11,7 @@ func registerConstants(c *Checker, scope *TypeScope, declarations List[SyntaxNod
 	for _, declaration := range declarations {
 		if declaration.kind == "GenDecl" && declaration.text == "const" {
 			previous := noSyntax()
+			index := 0
 			for _, spec := range declaration.children {
 				initializer := spec
 				if len(childAt(spec, 2).children) == 0 {
@@ -23,10 +24,11 @@ func registerConstants(c *Checker, scope *TypeScope, declarations List[SyntaxNod
 					checkFail(c, spec.at, "constant value count mismatch")
 				}
 				for _, name := range childAt(spec, 0).children {
-					c.constants = put(c.constants, constantKey(name), PendingConstant{name: name.text, value: head(values).value, declared: childAt(initializer, 1), at: name.at})
+					c.constants = put(c.constants, constantKey(name), PendingConstant{name: name.text, value: head(values).value, declared: childAt(initializer, 1), at: name.at, iota: index})
 					bindType(scope, name.text, "pending", tInvalid)
 					values = tail(values)
 				}
+				index++
 			}
 		}
 	}
@@ -50,9 +52,12 @@ func checkConstant(c *Checker, name string) {
 	if constant.declared.kind != "nil" {
 		id = typeSyntax(c, c.global, constant.declared)
 	}
+	previousIota := c.iota
+	c.iota = constant.iota
 	c.constantDepth++
 	value := checkExpression(c, c.global, constant.value, id)
 	c.constantDepth--
+	c.iota = previousIota
 	if id != tInvalid {
 		requireType(c, constant.value, value, id)
 	} else {
@@ -61,9 +66,15 @@ func checkConstant(c *Checker, name string) {
 			checkFail(c, constant.at, "constant requires a typed value")
 		}
 	}
-	if defaultType(id) != tInt && defaultType(id) != tBool && defaultType(id) != tString {
+	if !integerType(id) && defaultType(id) != tBool && defaultType(id) != tString {
 		checkFail(c, constant.at, "constant requires int, bool, or string")
 	}
-	bindType(c.global, constant.name, "const", id)
+	if value.constant.kind == "" {
+		checkFail(c, constant.at, "constant requires a constant expression")
+	}
+	bindConstant(c.global, constant.name, id, value.constant)
+	if c.record && constant.name != "_" {
+		c.definitions = put(c.definitions, sourceIdentity(constant.at), typedName(c.global, constant.name).value)
+	}
 	c.constantState = put(c.constantState, name, 2)
 }

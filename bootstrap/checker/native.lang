@@ -57,8 +57,8 @@ func nativeFunctions(c *Checker, scope *TypeScope) {
 	for _, name := range (List[string]{"len", "append", "make", "new", "panic", "print", "println"}) {
 		bindType(scope, name, "intrinsic", tInvalid)
 	}
-	bindType(scope, "true", "const", tUntypedBool)
-	bindType(scope, "false", "const", tUntypedBool)
+	bindConstant(scope, "true", tUntypedBool, constantBool(true))
+	bindConstant(scope, "false", tUntypedBool, constantBool(false))
 	bindType(scope, "nil", "const", tNil)
 	bindType(scope, "iota", "iota", tUntypedInt)
 }
@@ -79,11 +79,13 @@ func valueAt(values List[CheckedValue], index int) CheckedValue {
 
 // Inference defaults literal types but requires a concrete value type. Nil and
 // no-result calls cannot determine an unconstrained generic parameter.
-func inferredValueType(value CheckedValue) int {
+func inferredValueType(c *Checker, node SyntaxNode, value CheckedValue) int {
 	if value.kind != "value" || value.typeID == tNil || value.typeID == tVoid {
 		return tInvalid
 	}
-	return defaultType(value.typeID)
+	id := defaultType(value.typeID)
+	requireType(c, node, value, id)
+	return id
 }
 
 func nativeCall(c *Checker, scope *TypeScope, node SyntaxNode, name string, explicit List[int], values List[CheckedValue]) int {
@@ -106,6 +108,12 @@ func nativeCall(c *Checker, scope *TypeScope, node SyntaxNode, name string, expl
 		}
 		for _, size := range tail(values) {
 			requireType(c, node, size, tInt)
+			if size.constant.kind == "int" && size.constant.integer.negative {
+				checkFail(c, node.at, "negative make size")
+			}
+		}
+		if kind == "list" && count == 3 && valueAt(values, 1).constant.kind == "int" && valueAt(values, 2).constant.kind == "int" && integerCompare(valueAt(values, 1).constant.integer, valueAt(values, 2).constant.integer) > 0 {
+			checkFail(c, node.at, "make length exceeds capacity")
 		}
 		return value.typeID
 	}
@@ -116,6 +124,9 @@ func nativeCall(c *Checker, scope *TypeScope, node SyntaxNode, name string, expl
 		for _, value := range values {
 			if value.kind != "value" || value.typeID == tVoid || (name != "panic" && value.typeID == tNil) {
 				checkFail(c, node.at, "expected a value argument")
+			}
+			if value.kind == "value" && value.typeID != tNil {
+				requireType(c, node, value, defaultType(value.typeID))
 			}
 		}
 		return tVoid
@@ -146,6 +157,8 @@ func nativeCall(c *Checker, scope *TypeScope, node SyntaxNode, name string, expl
 		}
 		if head(explicit).ok {
 			requireType(c, node, value, head(explicit).value)
+		} else {
+			requireType(c, node, value, defaultType(value.typeID))
 		}
 		return tVoid
 	}
@@ -190,19 +203,19 @@ func nativeCall(c *Checker, scope *TypeScope, node SyntaxNode, name string, expl
 			if head(explicit).ok {
 				key = head(explicit).value
 			} else if name == "put" {
-				key = inferredValueType(valueAt(values, 1))
+				key = inferredValueType(c, node, valueAt(values, 1))
 			}
 			if head(tail(explicit)).ok {
 				elem = head(tail(explicit)).value
 			} else if name == "put" {
-				elem = inferredValueType(valueAt(values, 2))
+				elem = inferredValueType(c, node, valueAt(values, 2))
 			}
 			collection = expressionValue(compoundType(c, "map", key, elem))
 		} else if name == "prepend" || head(explicit).ok {
 			if head(explicit).ok {
 				elem = head(explicit).value
 			} else {
-				elem = inferredValueType(valueAt(values, 0))
+				elem = inferredValueType(c, node, valueAt(values, 0))
 			}
 			collection = expressionValue(compoundType(c, "list", 0, elem))
 		}

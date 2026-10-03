@@ -29,7 +29,7 @@ func parseExpression(p *Parser, minimum int, header bool) SyntaxNode {
 		op := p.current.text
 		parseAdvance(p)
 		right := parseExpression(p, level+1, header)
-		left = syntax("BinaryExpr", left.at, op, List[SyntaxNode]{left, right})
+		left = parserSyntax(p, "BinaryExpr", left.at, op, List[SyntaxNode]{left, right})
 	}
 	p.depth--
 	return left
@@ -48,7 +48,7 @@ func parseUnary(p *Parser, header bool) SyntaxNode {
 		if at.kind == "*" {
 			kind = "StarExpr"
 		}
-		result = syntax(kind, at, at.text, List[SyntaxNode]{parseUnary(p, header)})
+		result = parserSyntax(p, kind, at, at.text, List[SyntaxNode]{parseUnary(p, header)})
 	default:
 		result = parsePrimary(p, header)
 	}
@@ -74,12 +74,12 @@ func parsePrimary(p *Parser, header bool) SyntaxNode {
 		result = parseIdent(p)
 	case "INT", "STRING", "CHAR":
 		parseAdvance(p)
-		result = syntax(at.kind, at, at.text, nil)
+		result = parserSyntax(p, at.kind, at, at.text, nil)
 	case "(":
 		parseAdvance(p)
 		inner := parseExpression(p, 1, false)
 		expect(p, ")")
-		result = syntax("ParenExpr", at, "", List[SyntaxNode]{inner})
+		result = parserSyntax(p, "ParenExpr", at, "", List[SyntaxNode]{inner})
 	default:
 		parseFail(p, "expected expression, found "+at.kind)
 	}
@@ -87,7 +87,7 @@ func parsePrimary(p *Parser, header bool) SyntaxNode {
 		switch p.current.kind {
 		case ".":
 			parseAdvance(p)
-			result = syntax("SelectorExpr", result.at, "", List[SyntaxNode]{result, parseIdent(p)})
+			result = parserSyntax(p, "SelectorExpr", result.at, "", List[SyntaxNode]{result, parseIdent(p)})
 		case "[":
 			parseAdvance(p)
 			arguments := parseBracketArguments(p)
@@ -98,7 +98,7 @@ func parsePrimary(p *Parser, header bool) SyntaxNode {
 			if len(arguments) > 1 {
 				kind = "IndexListExpr"
 			}
-			result = syntax(kind, result.at, "", prepend(result, arguments))
+			result = parserSyntax(p, kind, result.at, "", prepend(result, arguments))
 		case "(":
 			parseAdvance(p)
 			var reversed List[SyntaxNode]
@@ -115,7 +115,7 @@ func parsePrimary(p *Parser, header bool) SyntaxNode {
 				}
 			}
 			expect(p, ")")
-			result = syntax("CallExpr", result.at, ellipsis, prepend(result, syntaxOrder(reversed)))
+			result = parserSyntax(p, "CallExpr", result.at, ellipsis, prepend(result, syntaxOrder(reversed)))
 		case "{":
 			if !literalType(result) || (header && result.kind != "StructType") {
 				return result
@@ -164,7 +164,7 @@ func parseComposite(p *Parser, typ SyntaxNode) SyntaxNode {
 	for p.reason == "" && p.current.kind != "}" {
 		value := parseValue(p)
 		if accept(p, ":") {
-			value = syntax("KeyValueExpr", value.at, "", List[SyntaxNode]{value, parseValue(p)})
+			value = parserSyntax(p, "KeyValueExpr", value.at, "", List[SyntaxNode]{value, parseValue(p)})
 		}
 		reversed = prepend(value, reversed)
 		if !accept(p, ",") {
@@ -173,7 +173,7 @@ func parseComposite(p *Parser, typ SyntaxNode) SyntaxNode {
 	}
 	expect(p, "}")
 	p.depth--
-	return syntax("CompositeLit", at, "", prepend(typ, syntaxOrder(reversed)))
+	return parserSyntax(p, "CompositeLit", at, "", prepend(typ, syntaxOrder(reversed)))
 }
 
 func parseExpressionList(p *Parser, header bool) List[SyntaxNode] {
@@ -194,10 +194,10 @@ func parseType(p *Parser) SyntaxNode {
 	if accept(p, "(") {
 		inner := parseType(p)
 		expect(p, ")")
-		result = syntax("ParenExpr", at, "", List[SyntaxNode]{inner})
+		result = parserSyntax(p, "ParenExpr", at, "", List[SyntaxNode]{inner})
 	} else {
 		if accept(p, "*") {
-			result = syntax("StarExpr", at, "*", List[SyntaxNode]{parseType(p)})
+			result = parserSyntax(p, "StarExpr", at, "*", List[SyntaxNode]{parseType(p)})
 		} else {
 			if at.kind == "struct" {
 				result = parseStruct(p)
@@ -220,7 +220,7 @@ func parseType(p *Parser) SyntaxNode {
 					if len(arguments) > 1 {
 						kind = "IndexListExpr"
 					}
-					result = syntax(kind, at, "", prepend(result, arguments))
+					result = parserSyntax(p, kind, at, "", prepend(result, arguments))
 				}
 			}
 		}

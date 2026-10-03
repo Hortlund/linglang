@@ -1,0 +1,357 @@
+package main
+
+// Compile-time integers use signed magnitudes with little-endian 30-bit limbs.
+// Products and carries fit in runtime int; source constants need not fit in int.
+const integerBase = 1 << 30
+
+type ConstantInteger struct {
+	negative bool
+	digits   List[int]
+}
+
+type IntegerDivision struct {
+	quotient  ConstantInteger
+	remainder ConstantInteger
+}
+
+func integerOrder(xs List[int]) List[int] {
+	var result List[int]
+	for _, x := range xs {
+		result = prepend(x, result)
+	}
+	return result
+}
+
+func integerNormalize(value ConstantInteger) ConstantInteger {
+	digits := integerOrder(value.digits)
+	for head(digits).ok && head(digits).value == 0 {
+		digits = tail(digits)
+	}
+	value.digits = integerOrder(digits)
+	if !head(value.digits).ok {
+		value.negative = false
+	}
+	return value
+}
+
+func integerSmall(n int) ConstantInteger {
+	negative := n < 0
+	// Keep accumulation negative so MinInt64 never needs an overflowing negation.
+	if n > 0 {
+		n = -n
+	}
+	var reversed List[int]
+	for n < 0 {
+		reversed = prepend(-(n % integerBase), reversed)
+		n /= integerBase
+	}
+	return ConstantInteger{negative: negative, digits: integerOrder(reversed)}
+}
+
+func integerBits(value ConstantInteger) int {
+	bits := 0
+	for _, digit := range integerOrder(value.digits) {
+		if bits == 0 {
+			for digit > 0 {
+				bits++
+				digit >>= 1
+			}
+		} else {
+			bits += 30
+		}
+	}
+	return bits
+}
+
+func integerMagnitudeCompare(a ConstantInteger, b ConstantInteger) int {
+	if len(a.digits) < len(b.digits) {
+		return -1
+	}
+	if len(a.digits) > len(b.digits) {
+		return 1
+	}
+	bs := integerOrder(b.digits)
+	for _, x := range integerOrder(a.digits) {
+		y := head(bs).value
+		if x < y {
+			return -1
+		}
+		if x > y {
+			return 1
+		}
+		bs = tail(bs)
+	}
+	return 0
+}
+
+func integerCompare(a ConstantInteger, b ConstantInteger) int {
+	if a.negative != b.negative {
+		if a.negative {
+			return -1
+		}
+		return 1
+	}
+	comparison := integerMagnitudeCompare(a, b)
+	if a.negative {
+		return -comparison
+	}
+	return comparison
+}
+
+func integerNegate(value ConstantInteger) ConstantInteger {
+	if head(value.digits).ok {
+		value.negative = !value.negative
+	}
+	return value
+}
+
+func integerMagnitudeAdd(a ConstantInteger, b ConstantInteger) ConstantInteger {
+	var reversed List[int]
+	carry := 0
+	for head(a.digits).ok || head(b.digits).ok || carry != 0 {
+		n := head(a.digits).value + head(b.digits).value + carry
+		reversed = prepend(n%integerBase, reversed)
+		carry = n / integerBase
+		a.digits = tail(a.digits)
+		b.digits = tail(b.digits)
+	}
+	return ConstantInteger{digits: integerOrder(reversed)}
+}
+
+// a's magnitude must be at least b's.
+func integerMagnitudeSubtract(a ConstantInteger, b ConstantInteger) ConstantInteger {
+	var reversed List[int]
+	borrow := 0
+	for _, digit := range a.digits {
+		n := digit - head(b.digits).value - borrow
+		borrow = 0
+		if n < 0 {
+			n += integerBase
+			borrow = 1
+		}
+		reversed = prepend(n, reversed)
+		b.digits = tail(b.digits)
+	}
+	return integerNormalize(ConstantInteger{digits: integerOrder(reversed)})
+}
+
+func integerAdd(a ConstantInteger, b ConstantInteger) ConstantInteger {
+	if a.negative == b.negative {
+		value := integerMagnitudeAdd(a, b)
+		value.negative = a.negative
+		return value
+	}
+	if integerMagnitudeCompare(a, b) >= 0 {
+		value := integerMagnitudeSubtract(a, b)
+		value.negative = a.negative
+		return integerNormalize(value)
+	}
+	value := integerMagnitudeSubtract(b, a)
+	value.negative = b.negative
+	return integerNormalize(value)
+}
+
+func integerMultiplySmall(a ConstantInteger, factor int) ConstantInteger {
+	var reversed List[int]
+	carry := 0
+	for _, digit := range a.digits {
+		n := digit*factor + carry
+		reversed = prepend(n%integerBase, reversed)
+		carry = n / integerBase
+	}
+	if carry != 0 {
+		reversed = prepend(carry, reversed)
+	}
+	return integerNormalize(ConstantInteger{negative: a.negative, digits: integerOrder(reversed)})
+}
+
+func integerMultiply(a ConstantInteger, b ConstantInteger) ConstantInteger {
+	result := ConstantInteger{}
+	shift := 0
+	for _, digit := range b.digits {
+		row := integerMultiplySmall(a, digit)
+		row.negative = false
+		for i := 0; i < shift; i++ {
+			row.digits = prepend(0, row.digits)
+		}
+		result = integerMagnitudeAdd(result, row)
+		shift++
+	}
+	result.negative = a.negative != b.negative
+	return integerNormalize(result)
+}
+
+func integerShiftLeft(a ConstantInteger, count int) ConstantInteger {
+	if !head(a.digits).ok {
+		return a
+	}
+	a = integerMultiplySmall(a, 1<<(count%30))
+	for count >= 30 {
+		a.digits = prepend(0, a.digits)
+		count -= 30
+	}
+	return a
+}
+
+func integerShiftRight(a ConstantInteger, count int) ConstantInteger {
+	lost := false
+	for count >= 30 && head(a.digits).ok {
+		lost = lost || head(a.digits).value != 0
+		a.digits = tail(a.digits)
+		count -= 30
+	}
+	count %= 30
+	if head(a.digits).ok && count != 0 {
+		lost = lost || head(a.digits).value&((1<<count)-1) != 0
+		var reversed List[int]
+		for head(a.digits).ok {
+			n := head(a.digits).value + head(tail(a.digits)).value*integerBase
+			reversed = prepend((n>>count)&(integerBase-1), reversed)
+			a.digits = tail(a.digits)
+		}
+		a.digits = integerOrder(reversed)
+	}
+	negative := a.negative
+	a = integerNormalize(a)
+	if negative && lost {
+		a.negative = false
+		a = integerMagnitudeAdd(a, integerSmall(1))
+		a.negative = true
+	}
+	return a
+}
+
+func integerDivide(a ConstantInteger, b ConstantInteger) IntegerDivision {
+	negative := a.negative != b.negative
+	remainderNegative := a.negative
+	a.negative = false
+	b.negative = false
+	q := ConstantInteger{}
+	r := ConstantInteger{}
+	if !head(b.digits).ok {
+		return IntegerDivision{}
+	}
+	if len(b.digits) == 1 {
+		divisor := head(b.digits).value
+		carry := 0
+		for _, digit := range integerOrder(a.digits) {
+			n := carry*integerBase + digit
+			q.digits = prepend(n/divisor, q.digits)
+			carry = n % divisor
+		}
+		r = integerSmall(carry)
+	} else {
+		for _, digit := range integerOrder(a.digits) {
+			for bit := 29; bit >= 0; bit-- {
+				r = integerMagnitudeAdd(integerShiftLeft(r, 1), integerSmall((digit>>bit)&1))
+				q = integerShiftLeft(q, 1)
+				if integerMagnitudeCompare(r, b) >= 0 {
+					r = integerMagnitudeSubtract(r, b)
+					q = integerMagnitudeAdd(q, integerSmall(1))
+				}
+			}
+		}
+	}
+	q.negative = negative
+	r.negative = remainderNegative
+	return IntegerDivision{quotient: integerNormalize(q), remainder: integerNormalize(r)}
+}
+
+func integerTwos(value ConstantInteger, width int) List[int] {
+	var reversed List[int]
+	carry := 0
+	if value.negative {
+		carry = 1
+	}
+	for i := 0; i < width; i++ {
+		digit := head(value.digits).value
+		if value.negative {
+			digit = (integerBase - 1) ^ digit
+			digit += carry
+			carry = digit / integerBase
+			digit %= integerBase
+		}
+		reversed = prepend(digit, reversed)
+		value.digits = tail(value.digits)
+	}
+	return integerOrder(reversed)
+}
+
+func integerBitwise(a ConstantInteger, b ConstantInteger, operator string) ConstantInteger {
+	width := len(a.digits)
+	if len(b.digits) > width {
+		width = len(b.digits)
+	}
+	width++
+	as := integerTwos(a, width)
+	bs := integerTwos(b, width)
+	var reversed List[int]
+	for _, x := range as {
+		y := head(bs).value
+		n := x & y
+		switch operator {
+		case "|":
+			n = x | y
+		case "^":
+			n = x ^ y
+		case "&^":
+			n = x &^ y
+		}
+		reversed = prepend(n, reversed)
+		bs = tail(bs)
+	}
+	value := ConstantInteger{digits: integerOrder(reversed)}
+	if head(reversed).value&(1<<29) != 0 {
+		value.negative = true
+		value.digits = integerTwos(value, width)
+	}
+	return integerNormalize(value)
+}
+
+func integerParse(text string) ConstantInteger {
+	base := 10
+	start := 0
+	if len(text) > 1 && byteAt(text, 0) == '0' {
+		base = 8
+		switch byteAt(text, 1) {
+		case 'x', 'X':
+			base = 16
+			start = 2
+		case 'b', 'B':
+			base = 2
+			start = 2
+		case 'o', 'O':
+			start = 2
+		}
+	}
+	value := ConstantInteger{}
+	for i := start; i < len(text); i++ {
+		if byteAt(text, i) == '_' {
+			continue
+		}
+		value = integerMagnitudeAdd(integerMultiplySmall(value, base), integerSmall(digitValue(byteAt(text, i))))
+		if integerBits(value) > 512 {
+			return value
+		}
+	}
+	return value
+}
+
+func integerFitsInt(value ConstantInteger) bool {
+	if integerBits(value) <= 63 {
+		return true
+	}
+	return value.negative && integerMagnitudeCompare(value, ConstantInteger{digits: List[int]{0, 0, 8}}) == 0
+}
+
+// Call only after a range check; negative accumulation also handles MinInt64.
+func integerToInt(value ConstantInteger) int {
+	n := 0
+	for _, digit := range integerOrder(value.digits) {
+		n = n*integerBase - digit
+	}
+	if !value.negative {
+		n = -n
+	}
+	return n
+}

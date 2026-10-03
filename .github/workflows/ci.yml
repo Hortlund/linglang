@@ -12,7 +12,7 @@ jobs:
   test:
     name: ${{ matrix.os }} / OTP ${{ matrix.otp }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -36,8 +36,8 @@ jobs:
       - name: Build the CLI
         run: go build -o _build/linglang ./cmd/linglang
       - name: Check example formatting
-        run: ./_build/linglang fmt --check examples/bean_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker
-      - name: Test beans and the bootstrap frontend on both backends with GC stress
+        run: ./_build/linglang fmt --check examples/bean_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker bootstrap/emitter examples/bootstrap_demo
+      - name: Test beans and the bootstrap tools on both backends with GC stress
         run: |
           ./_build/linglang test --gc-stress --gc-stats examples/bean_tests
           ./_build/linglang test --no-opt --gc-stress --gc-stats examples/bean_tests
@@ -47,8 +47,10 @@ jobs:
           ./_build/linglang test --no-opt --gc-stress --gc-stats bootstrap/parser
           ./_build/linglang test --gc-stress --gc-stats bootstrap/resolver
           ./_build/linglang test --no-opt --gc-stress --gc-stats bootstrap/resolver
-          ./_build/linglang test --gc-stress --gc-stats bootstrap/checker
-          ./_build/linglang test --no-opt --gc-stress --gc-stats bootstrap/checker
+          ./_build/linglang test --gc-stress --gc-stats --timeout 5m bootstrap/checker
+          ./_build/linglang test --no-opt --gc-stress --gc-stats --timeout 5m bootstrap/checker
+          ./_build/linglang test --gc-stress --gc-stats --timeout 2m bootstrap/emitter
+          ./_build/linglang test --no-opt --gc-stress --gc-stats --timeout 2m bootstrap/emitter
       - name: Fuzz the compiler
         if: matrix.os == 'ubuntu-24.04' && matrix.otp == '29'
         run: go test ./internal/compiler -run='^$' -fuzz='^FuzzCompile$' -fuzztime=10s -parallel=2

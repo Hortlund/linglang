@@ -473,7 +473,10 @@ func (g *localLowering) emitSimple(stmt ast.Stmt, state map[types.Object]string)
 				return "", err
 			}
 			if s.Tok != token.ASSIGN {
-				op := map[token.Token]string{token.ADD_ASSIGN: "add", token.SUB_ASSIGN: "sub", token.MUL_ASSIGN: "mul", token.QUO_ASSIGN: "divide", token.REM_ASSIGN: "remain"}[s.Tok]
+				op := map[token.Token]string{token.ADD_ASSIGN: "add", token.SUB_ASSIGN: "sub", token.MUL_ASSIGN: "mul", token.QUO_ASSIGN: "divide", token.REM_ASSIGN: "remain", token.AND_ASSIGN: "bit_and", token.OR_ASSIGN: "bit_or", token.XOR_ASSIGN: "bit_xor", token.AND_NOT_ASSIGN: "bit_clear", token.SHL_ASSIGN: "shift_left", token.SHR_ASSIGN: "shift_right"}[s.Tok]
+				if s.Tok == token.SHL_ASSIGN || s.Tok == token.SHR_ASSIGN {
+					value = c.shiftCount(s.Rhs[0], value)
+				}
 				value = c.ordered([]string{readFields(state[obj], path), value}, func(v []string) string { return "linglang_rt:binary(" + op + ", " + v[0] + ", " + v[1] + ")" })
 			}
 			return g.assignValue(obj, path, value, state), nil

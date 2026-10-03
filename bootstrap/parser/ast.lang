@@ -3,6 +3,7 @@ package main
 // Children are immutable values, not managed pointers. Recursive lists keep
 // syntax trees cheap to share without creating mutable heap graphs.
 type SyntaxNode struct {
+	id       int
 	kind     string
 	text     string
 	at       Token
@@ -20,6 +21,7 @@ type ParseResult struct {
 }
 
 type Parser struct {
+	nextID  int
 	lexer   *Lexer
 	current Token
 	reason  string
@@ -29,6 +31,14 @@ type Parser struct {
 
 func syntax(kind string, at Token, text string, children List[SyntaxNode]) SyntaxNode {
 	return SyntaxNode{kind: kind, at: at, text: text, children: children}
+}
+
+// IDs are unique within one parsed file, even when nested nodes share offsets.
+func parserSyntax(p *Parser, kind string, at Token, text string, children List[SyntaxNode]) SyntaxNode {
+	p.nextID++
+	node := syntax(kind, at, text, children)
+	node.id = p.nextID
+	return node
 }
 
 func noSyntax() SyntaxNode { return SyntaxNode{kind: "nil"} }
@@ -133,7 +143,7 @@ func parse(filename string, source string) ParseResult {
 			expect(&p, ";")
 		}
 	}
-	root := syntax("File", at, "", prepend(name, syntaxOrder(reversed)))
+	root := parserSyntax(&p, "File", at, "", prepend(name, syntaxOrder(reversed)))
 	if p.reason != "" {
 		return ParseResult{filename: filename, reason: p.reason, offset: p.errorAt.offset, line: p.errorAt.line, column: p.errorAt.column}
 	}
@@ -142,5 +152,5 @@ func parse(filename string, source string) ParseResult {
 
 func parseIdent(p *Parser) SyntaxNode {
 	at := expect(p, "IDENT")
-	return syntax("Ident", at, at.text, nil)
+	return parserSyntax(p, "Ident", at, at.text, nil)
 }

@@ -1,0 +1,356 @@
+package main
+
+type ConstantValue struct {
+	kind    string
+	integer ConstantInteger
+	boolean bool
+	text    string
+	rope    *ConstantStringNode
+}
+
+func untypedInteger(id int) bool { return id == tUntypedInt || id == tUntypedRune }
+func integerType(id int) bool    { return id == tInt || id == tRune || untypedInteger(id) }
+
+func constantInteger(value ConstantInteger) ConstantValue {
+	return ConstantValue{kind: "int", integer: value}
+}
+func constantBool(value bool) ConstantValue     { return ConstantValue{kind: "bool", boolean: value} }
+func constantString(value string) ConstantValue { return ConstantValue{kind: "string", text: value} }
+
+func bindConstant(scope *TypeScope, name string, id int, value ConstantValue) {
+	if name != "_" {
+		scope.names = put(scope.names, name, CheckedBinding{kind: "const", typeID: id, constant: value})
+	}
+}
+
+func constantByte(value int) string {
+	bytes := "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26\x27\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33\x34\x35\x36\x37\x38\x39\x3a\x3b\x3c\x3d\x3e\x3f\x40\x41\x42\x43\x44\x45\x46\x47\x48\x49\x4a\x4b\x4c\x4d\x4e\x4f\x50\x51\x52\x53\x54\x55\x56\x57\x58\x59\x5a\x5b\x5c\x5d\x5e\x5f\x60\x61\x62\x63\x64\x65\x66\x67\x68\x69\x6a\x6b\x6c\x6d\x6e\x6f\x70\x71\x72\x73\x74\x75\x76\x77\x78\x79\x7a\x7b\x7c\x7d\x7e\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff"
+	return slice(bytes, value, value+1)
+}
+
+func constantRune(value int) string {
+	if value < 0 || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff) {
+		value = 0xfffd
+	}
+	if value < 0x80 {
+		return constantByte(value)
+	}
+	if value < 0x800 {
+		return constantByte(0xc0|(value>>6)) + constantByte(0x80|(value&63))
+	}
+	if value < 0x10000 {
+		return constantByte(0xe0|(value>>12)) + constantByte(0x80|((value>>6)&63)) + constantByte(0x80|(value&63))
+	}
+	return constantByte(0xf0|(value>>18)) + constantByte(0x80|((value>>12)&63)) + constantByte(0x80|((value>>6)&63)) + constantByte(0x80|(value&63))
+}
+
+// Token validation already checked escape widths and Unicode scalar bounds.
+func constantText(text string, runeLiteral bool) ConstantValue {
+	var parts List[string]
+	lastRune := 0
+	raw := byteAt(text, 0) == '`'
+	if !runeLiteral {
+		body := slice(text, 1, len(text)-1)
+		if raw {
+			return constantString(join(split(body, "\r"), ""))
+		}
+		if len(split(body, "\\")) == 1 {
+			return constantString(body)
+		}
+	}
+	start := 1
+	for i := 1; i < len(text)-1; i++ {
+		value := byteAt(text, i)
+		part := ""
+		if value == '\\' {
+			if !runeLiteral && start < i {
+				parts = prepend(slice(text, start, i), parts)
+			}
+			i++
+			value = byteAt(text, i)
+			switch value {
+			case 'a':
+				value = 7
+			case 'b':
+				value = 8
+			case 'f':
+				value = 12
+			case 'n':
+				value = 10
+			case 'r':
+				value = 13
+			case 't':
+				value = 9
+			case 'v':
+				value = 11
+			case 'x', 'u', 'U':
+				width := 2
+				unicode := value != 'x'
+				if value == 'u' {
+					width = 4
+				}
+				if value == 'U' {
+					width = 8
+				}
+				value = 0
+				for j := 0; j < width; j++ {
+					i++
+					value = value*16 + digitValue(byteAt(text, i))
+				}
+				if unicode {
+					part = constantRune(value)
+				} else {
+					part = constantByte(value)
+				}
+				parts = prepend(part, parts)
+				lastRune = value
+				start = i + 1
+				continue
+			default:
+				if value >= '0' && value <= '7' {
+					value -= '0'
+					for j := 0; j < 2; j++ {
+						i++
+						value = value*8 + digitValue(byteAt(text, i))
+					}
+				}
+			}
+			part = constantByte(value)
+		} else if runeLiteral {
+			r := runeAt(text, i)
+			value = r.value
+			part = slice(text, i, i+r.width)
+			i += r.width - 1
+		} else {
+			continue
+		}
+		lastRune = value
+		parts = prepend(part, parts)
+		start = i + 1
+	}
+	if runeLiteral {
+		return constantInteger(integerSmall(lastRune))
+	}
+	if start < len(text)-1 {
+		parts = prepend(slice(text, start, len(text)-1), parts)
+	}
+	var ordered List[string]
+	for _, part := range parts {
+		ordered = prepend(part, ordered)
+	}
+	return constantString(join(ordered, ""))
+}
+
+func literalConstant(c *Checker, node SyntaxNode) ConstantValue {
+	found := get(c.literals, node.text)
+	if found.ok {
+		return found.value
+	}
+	value := ConstantValue{}
+	if node.kind == "INT" {
+		if len(node.text) > 10000 {
+			checkFail(c, node.at, "excessively long integer constant")
+			return value
+		}
+		value = constantInteger(integerParse(node.text))
+		if integerBits(value.integer) > 512 {
+			checkFail(c, node.at, "integer constant exceeds 512 bits")
+		}
+	} else {
+		value = constantText(node.text, node.kind == "CHAR")
+	}
+	c.literals = put(c.literals, node.text, value)
+	return value
+}
+
+func checkedConstant(c *Checker, node SyntaxNode, id int, value ConstantValue) CheckedValue {
+	result := expressionValue(id)
+	result.constant = value
+	if value.kind == "int" && integerBits(value.integer) > 512 {
+		checkFail(c, node.at, "integer constant exceeds 512 bits")
+	}
+	if value.kind == "string" && constantStringLength(value) > maxConstantStringBytes {
+		checkFail(c, node.at, "constant string exceeds size limit")
+	}
+	if id == tInt || id == tRune {
+		requireType(c, node, result, id)
+	}
+	return result
+}
+
+func constantUnary(c *Checker, node SyntaxNode, value CheckedValue) CheckedValue {
+	if value.constant.kind == "" {
+		return CheckedValue{kind: "value", typeID: value.typeID, integers: value.integers}
+	}
+	constant := value.constant
+	switch node.text {
+	case "!":
+		constant.boolean = !constant.boolean
+	case "-":
+		constant.integer = integerNegate(constant.integer)
+	case "^":
+		constant.integer = integerAdd(integerNegate(constant.integer), integerSmall(-1))
+	}
+	return checkedConstant(c, node, value.typeID, constant)
+}
+
+func deferredIntegerOperands(node SyntaxNode, value CheckedValue) List[DeferredInteger] {
+	operands := value.integers
+	if untypedInteger(value.typeID) && value.constant.kind == "int" {
+		operands = prepend(DeferredInteger{at: node.at, integer: value.constant.integer}, operands)
+	}
+	return operands
+}
+
+func constantBinary(c *Checker, node SyntaxNode, id int, left CheckedValue, right CheckedValue) CheckedValue {
+	if c.reason != "" {
+		return CheckedValue{}
+	}
+	a := left.constant
+	b := right.constant
+	if (node.text == "/" || node.text == "%") && b.kind == "int" && !head(b.integer.digits).ok {
+		checkFail(c, node.at, "division by zero")
+	}
+	if node.text == "<<" || node.text == ">>" {
+		if b.kind == "int" && (b.integer.negative || integerBits(b.integer) > 64) {
+			checkFail(c, node.at, "invalid shift count")
+			return CheckedValue{}
+		}
+		if a.kind == "int" && b.kind == "int" {
+			if integerCompare(b.integer, integerSmall(1074)) > 0 {
+				checkFail(c, node.at, "constant shift count exceeds 1074")
+				return CheckedValue{}
+			}
+			count := integerToInt(b.integer)
+			value := integerShiftRight(a.integer, count)
+			if node.text == "<<" {
+				value = integerShiftLeft(a.integer, count)
+			}
+			return checkedConstant(c, node, id, constantInteger(value))
+		}
+		// A shift count has its own integer context, independent of the result.
+		if b.kind == "" {
+			for _, operand := range right.integers {
+				if operand.integer.negative || integerBits(operand.integer) > 64 {
+					checkFail(c, operand.at, "constant operand overflows unsigned shift count")
+				}
+			}
+		}
+	}
+	if a.kind == "" || b.kind == "" {
+		result := expressionValue(id)
+		if untypedInteger(id) {
+			result.integers = deferredIntegerOperands(childAt(node, 0), left)
+			if node.text != "<<" && node.text != ">>" {
+				for _, operand := range deferredIntegerOperands(childAt(node, 1), right) {
+					result.integers = prepend(operand, result.integers)
+				}
+			}
+		}
+		return result
+	}
+	if a.kind == "int" && b.kind == "int" {
+		comparison := integerCompare(a.integer, b.integer)
+		value := ConstantInteger{}
+		switch node.text {
+		case "+":
+			value = integerAdd(a.integer, b.integer)
+		case "-":
+			value = integerAdd(a.integer, integerNegate(b.integer))
+		case "*":
+			value = integerMultiply(a.integer, b.integer)
+		case "/", "%":
+			if c.reason != "" {
+				return CheckedValue{}
+			}
+			division := integerDivide(a.integer, b.integer)
+			value = division.quotient
+			if node.text == "%" {
+				value = division.remainder
+			}
+		case "&", "|", "^", "&^":
+			value = integerBitwise(a.integer, b.integer, node.text)
+		case "==":
+			return checkedConstant(c, node, id, constantBool(comparison == 0))
+		case "!=":
+			return checkedConstant(c, node, id, constantBool(comparison != 0))
+		case "<":
+			return checkedConstant(c, node, id, constantBool(comparison < 0))
+		case "<=":
+			return checkedConstant(c, node, id, constantBool(comparison <= 0))
+		case ">":
+			return checkedConstant(c, node, id, constantBool(comparison > 0))
+		case ">=":
+			return checkedConstant(c, node, id, constantBool(comparison >= 0))
+		}
+		return checkedConstant(c, node, id, constantInteger(value))
+	}
+	if a.kind == "string" && b.kind == "string" {
+		switch node.text {
+		case "+":
+			return checkedConstant(c, node, id, concatenateConstantStrings(c, node, a, b))
+		case "==":
+			return checkedConstant(c, node, id, constantBool(constantStringLength(a) == constantStringLength(b) && compareConstantStrings(a, b) == 0))
+		case "!=":
+			return checkedConstant(c, node, id, constantBool(constantStringLength(a) != constantStringLength(b) || compareConstantStrings(a, b) != 0))
+		case "<":
+			return checkedConstant(c, node, id, constantBool(compareConstantStrings(a, b) < 0))
+		case "<=":
+			return checkedConstant(c, node, id, constantBool(compareConstantStrings(a, b) <= 0))
+		case ">":
+			return checkedConstant(c, node, id, constantBool(compareConstantStrings(a, b) > 0))
+		case ">=":
+			return checkedConstant(c, node, id, constantBool(compareConstantStrings(a, b) >= 0))
+		}
+	}
+	if a.kind == "bool" && b.kind == "bool" {
+		value := a.boolean == b.boolean
+		switch node.text {
+		case "!=":
+			value = !value
+		case "&&":
+			value = a.boolean && b.boolean
+		case "||":
+			value = a.boolean || b.boolean
+		}
+		return checkedConstant(c, node, id, constantBool(value))
+	}
+	return expressionValue(id)
+}
+
+func constantIdentity(value ConstantValue) string {
+	if value.kind == "string" {
+		return "s:" + constantStringBytes(value)
+	}
+	if value.kind != "int" {
+		return ""
+	}
+	result := "i:"
+	if value.integer.negative {
+		result += "-"
+	}
+	for _, digit := range value.integer.digits {
+		result += formatInt(digit) + ":"
+	}
+	return result
+}
+
+func constantConversion(c *Checker, node SyntaxNode, value CheckedValue, id int) CheckedValue {
+	constant := value.constant
+	if constant.kind == "" {
+		if id == tString && head(value.integers).ok {
+			checkFail(c, node.at, "untyped shifted operand requires an integer context")
+		} else if id != tString {
+			requireType(c, node, value, id)
+		}
+		return expressionValue(id)
+	}
+	if id == tString && constant.kind == "int" {
+		codepoint := 0xfffd
+		if !constant.integer.negative && integerCompare(constant.integer, integerSmall(0x10ffff)) <= 0 {
+			codepoint = integerToInt(constant.integer)
+		}
+		constant = constantString(constantRune(codepoint))
+	}
+	return checkedConstant(c, node, id, constant)
+}
