@@ -1,0 +1,75 @@
+package main
+
+func packageName(r *Resolver, scope *Scope, name SyntaxNode, kind string) {
+	if get(scope.parent.names, name.text).ok {
+		// Prelude declarations are in the seed's package; language-level builtins
+		// like println are in the universe and may be shadowed by a package name.
+		switch name.text {
+		case "int", "bool", "string", "len", "append", "make", "new", "panic", "print", "println", "true", "false", "nil", "iota":
+		default:
+			resolveFail(r, name.at, "duplicate declaration of "+name.text)
+			return
+		}
+	}
+	defineSymbol(r, scope, name, kind)
+}
+
+func predeclare(r *Resolver, scope *Scope, declaration SyntaxNode) {
+	if declaration.kind == "FuncDecl" {
+		packageName(r, scope, childAt(declaration, 0), "func")
+		return
+	}
+	for _, spec := range declaration.children {
+		if spec.kind == "TypeSpec" {
+			packageName(r, scope, childAt(spec, 0), "type")
+		} else {
+			for _, name := range childAt(spec, 0).children {
+				packageName(r, scope, name, declaration.text)
+			}
+		}
+	}
+}
+
+func resolveFields(r *Resolver, scope *Scope, fields SyntaxNode) {
+	for _, field := range fields.children {
+		resolveExpression(r, scope, childAt(field, 1))
+	}
+}
+
+func resolveDeclaration(r *Resolver, scope *Scope, declaration SyntaxNode, top bool) {
+	if r.reason != "" {
+		return
+	}
+	if declaration.kind == "FuncDecl" {
+		// Parameter names do not enter scope until all parameter/result types
+		// have been resolved. The parameters and outer body share one scope.
+		resolveFields(r, scope, childAt(declaration, 1))
+		resolveFields(r, scope, childAt(declaration, 2))
+		functionScope := Scope{parent: scope}
+		for _, field := range childAt(declaration, 1).children {
+			for _, name := range childAt(field, 0).children {
+				defineSymbol(r, &functionScope, name, "param")
+			}
+		}
+		resolveStatements(r, &functionScope, childAt(declaration, 3).children)
+		return
+	}
+	for _, spec := range declaration.children {
+		if spec.kind == "TypeSpec" {
+			if !top {
+				defineSymbol(r, scope, childAt(spec, 0), "type")
+			}
+			resolveExpression(r, scope, childAt(spec, 1))
+		} else {
+			resolveExpression(r, scope, childAt(spec, 1))
+			for _, value := range childAt(spec, 2).children {
+				resolveExpression(r, scope, value)
+			}
+			if !top {
+				for _, name := range childAt(spec, 0).children {
+					defineSymbol(r, scope, name, declaration.text)
+				}
+			}
+		}
+	}
+}

@@ -1,0 +1,230 @@
+package main
+
+func precedence(kind string) int {
+	switch kind {
+	case "||":
+		return 1
+	case "&&":
+		return 2
+	case "==", "!=", "<", "<=", ">", ">=":
+		return 3
+	case "+", "-", "|", "^":
+		return 4
+	case "*", "/", "%", "<<", ">>", "&", "&^":
+		return 5
+	}
+	return 0
+}
+
+func parseExpression(p *Parser, minimum int, header bool) SyntaxNode {
+	if !parseEnter(p) {
+		return noSyntax()
+	}
+	left := parseUnary(p, header)
+	for p.reason == "" {
+		level := precedence(p.current.kind)
+		if level < minimum {
+			break
+		}
+		op := p.current.text
+		parseAdvance(p)
+		right := parseExpression(p, level+1, header)
+		left = syntax("BinaryExpr", left.at, op, List[SyntaxNode]{left, right})
+	}
+	p.depth--
+	return left
+}
+
+func parseUnary(p *Parser, header bool) SyntaxNode {
+	if !parseEnter(p) {
+		return noSyntax()
+	}
+	at := p.current
+	var result SyntaxNode
+	switch at.kind {
+	case "+", "-", "!", "^", "&", "*":
+		parseAdvance(p)
+		kind := "UnaryExpr"
+		if at.kind == "*" {
+			kind = "StarExpr"
+		}
+		result = syntax(kind, at, at.text, List[SyntaxNode]{parseUnary(p, header)})
+	default:
+		result = parsePrimary(p, header)
+	}
+	p.depth--
+	return result
+}
+
+func literalType(node SyntaxNode) bool {
+	switch node.kind {
+	case "Ident", "SelectorExpr", "IndexExpr", "IndexListExpr", "StructType":
+		return true
+	}
+	return false
+}
+
+func parsePrimary(p *Parser, header bool) SyntaxNode {
+	at := p.current
+	result := noSyntax()
+	switch at.kind {
+	case "struct":
+		result = parseType(p)
+	case "IDENT":
+		result = parseIdent(p)
+	case "INT", "STRING", "CHAR":
+		parseAdvance(p)
+		result = syntax(at.kind, at, at.text, nil)
+	case "(":
+		parseAdvance(p)
+		inner := parseExpression(p, 1, false)
+		expect(p, ")")
+		result = syntax("ParenExpr", at, "", List[SyntaxNode]{inner})
+	default:
+		parseFail(p, "expected expression, found "+at.kind)
+	}
+	for p.reason == "" {
+		switch p.current.kind {
+		case ".":
+			parseAdvance(p)
+			result = syntax("SelectorExpr", result.at, "", List[SyntaxNode]{result, parseIdent(p)})
+		case "[":
+			parseAdvance(p)
+			arguments := parseBracketArguments(p)
+			if len(arguments) == 0 {
+				parseFail(p, "type arguments or index cannot be empty")
+			}
+			kind := "IndexExpr"
+			if len(arguments) > 1 {
+				kind = "IndexListExpr"
+			}
+			result = syntax(kind, result.at, "", prepend(result, arguments))
+		case "(":
+			parseAdvance(p)
+			var reversed List[SyntaxNode]
+			ellipsis := ""
+			for p.reason == "" && p.current.kind != ")" {
+				reversed = prepend(parseExpression(p, 1, false), reversed)
+				if accept(p, "...") {
+					ellipsis = "..."
+					accept(p, ",")
+					break
+				}
+				if !accept(p, ",") {
+					break
+				}
+			}
+			expect(p, ")")
+			result = syntax("CallExpr", result.at, ellipsis, prepend(result, syntaxOrder(reversed)))
+		case "{":
+			if !literalType(result) || (header && result.kind != "StructType") {
+				return result
+			}
+			result = parseComposite(p, result)
+		default:
+			return result
+		}
+	}
+	return result
+}
+
+// The first argument can still be an index expression. A comma resolves the
+// ambiguity, so subsequent arguments must use type syntax.
+func parseBracketArguments(p *Parser) List[SyntaxNode] {
+	var reversed List[SyntaxNode]
+	if p.current.kind != "]" {
+		reversed = prepend(parseExpression(p, 1, false), reversed)
+		for accept(p, ",") {
+			if p.current.kind == "]" {
+				break
+			}
+			reversed = prepend(parseType(p), reversed)
+		}
+	}
+	expect(p, "]")
+	return syntaxOrder(reversed)
+}
+
+func parseValue(p *Parser) SyntaxNode {
+	if p.current.kind == "{" {
+		return parseComposite(p, noSyntax())
+	}
+	return parseExpression(p, 1, false)
+}
+
+func parseComposite(p *Parser, typ SyntaxNode) SyntaxNode {
+	if !parseEnter(p) {
+		return noSyntax()
+	}
+	at := expect(p, "{")
+	if typ.kind != "nil" {
+		at = typ.at
+	}
+	var reversed List[SyntaxNode]
+	for p.reason == "" && p.current.kind != "}" {
+		value := parseValue(p)
+		if accept(p, ":") {
+			value = syntax("KeyValueExpr", value.at, "", List[SyntaxNode]{value, parseValue(p)})
+		}
+		reversed = prepend(value, reversed)
+		if !accept(p, ",") {
+			break
+		}
+	}
+	expect(p, "}")
+	p.depth--
+	return syntax("CompositeLit", at, "", prepend(typ, syntaxOrder(reversed)))
+}
+
+func parseExpressionList(p *Parser, header bool) List[SyntaxNode] {
+	var reversed List[SyntaxNode]
+	reversed = prepend(parseExpression(p, 1, header), reversed)
+	for accept(p, ",") {
+		reversed = prepend(parseExpression(p, 1, header), reversed)
+	}
+	return syntaxOrder(reversed)
+}
+
+func parseType(p *Parser) SyntaxNode {
+	if !parseEnter(p) {
+		return noSyntax()
+	}
+	at := p.current
+	result := noSyntax()
+	if accept(p, "(") {
+		inner := parseType(p)
+		expect(p, ")")
+		result = syntax("ParenExpr", at, "", List[SyntaxNode]{inner})
+	} else {
+		if accept(p, "*") {
+			result = syntax("StarExpr", at, "*", List[SyntaxNode]{parseType(p)})
+		} else {
+			if at.kind == "struct" {
+				result = parseStruct(p)
+			} else {
+				result = parseIdent(p)
+				if accept(p, "[") {
+					var reversed List[SyntaxNode]
+					for p.reason == "" && p.current.kind != "]" {
+						reversed = prepend(parseType(p), reversed)
+						if !accept(p, ",") {
+							break
+						}
+					}
+					expect(p, "]")
+					arguments := syntaxOrder(reversed)
+					if len(arguments) == 0 {
+						parseFail(p, "type arguments cannot be empty")
+					}
+					kind := "IndexExpr"
+					if len(arguments) > 1 {
+						kind = "IndexListExpr"
+					}
+					result = syntax(kind, at, "", prepend(result, arguments))
+				}
+			}
+		}
+	}
+	p.depth--
+	return result
+}

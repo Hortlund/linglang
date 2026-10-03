@@ -1,0 +1,21 @@
+package main
+
+// This executable is written in Linglang. Only its seed compiler is Go.
+func main() {
+	options := args()
+	if len(options) != 1 {
+		panic("usage: lexer <source.lang>")
+	}
+	filename := head(options).value
+	input := readFile(filename)
+	if !input.ok {
+		panic("cannot read " + filename + ": " + input.reason)
+	}
+	result := lex(filename, input.value)
+	if !result.ok {
+		panic(filename + ":" + formatInt(result.line) + ":" + formatInt(result.column) + ": " + result.reason)
+	}
+	for _, item := range result.tokens {
+		println(formatInt(item.offset), formatInt(item.line), formatInt(item.column), item.kind, quotedText(item.text))
+	}
+}

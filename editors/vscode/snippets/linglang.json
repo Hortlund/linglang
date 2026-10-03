@@ -1,0 +1,48 @@
+{
+  "Main program": {
+    "prefix": "main",
+    "body": [
+      "package main",
+      "",
+      "func main() {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "Test": {
+    "prefix": "test",
+    "body": [
+      "func Test${1:Bean}() {",
+      "\tassert(${2:true})",
+      "\t$0",
+      "}"
+    ]
+  },
+  "Function": {
+    "prefix": "func",
+    "body": [
+      "func ${1:name}(${2}) ${3} {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "Struct": {
+    "prefix": "struct",
+    "body": [
+      "type ${1:Bean} struct {",
+      "\t${2:value} ${3:int}",
+      "}"
+    ]
+  },
+  "Supervised worker": {
+    "prefix": "supervise",
+    "body": [
+      "s := startSupervisor(${1:3}, ${2:5})",
+      "child := supervise(s, \"${3:worker}\", ${4:worker}, ${5:args}, ChildOptions{})",
+      "if !child.ok {",
+      "\tpanic(child.reason)",
+      "}",
+      "${0}"
+    ]
+  }
+}

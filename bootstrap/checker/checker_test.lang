@@ -1,0 +1,205 @@
+package main
+
+func checkedSource(source string) CheckResult {
+	parsed := parse("fixture.lang", "package main\n"+source)
+	assert(parsed.ok)
+	return checkPackage(List[SyntaxNode]{parsed.root})
+}
+
+func TestPrimitiveTypes() {
+	assert(checkedSource("func f(x int,b bool,s string) int { if b { x+=1 }; println(s+xString(x)); return x }; func xString(x int)string{return formatInt(x)}").ok)
+	for _, source := range (List[string]{
+		"func f(){var x int = true;println(x)}",
+		"func f(){x:=1;x=\"bean\"}",
+		"func f()int{return false}",
+		"func f()int{return}",
+		"func f(){return 1}",
+		"func f(x int){};func g(){f(true)}",
+		"func f(x int){};func g(){f()}",
+		"func f(){if 1{println(1)}}",
+		"func f(){x:=true;x++}",
+		"func f(){const x=1;x=2}",
+		"func f(){x:=1;_ = & (x+1)}",
+		"func f(){println(len(1))}",
+		"func f(){x:=assert(true);println(x)}",
+		"func f(){_ = 1+true}",
+	}) {
+		result := checkedSource(source)
+		assert(!result.ok)
+		assert(result.at.filename == "fixture.lang")
+		assert(result.at.line >= 2)
+		assert(result.reason != "")
+	}
+}
+
+func TestStructsAndCollections() {
+	assert(checkedSource("type N struct{value int;next *N};func f(){n:=N{value:1};n.next=&n;var xs List[*N];xs=prepend(&n,xs);m:=Map[string,*N]{\"bean\":&n};println(head(xs).value.value,get(m,\"bean\").ok);for k,v:=range m{println(k,v.value)}}").ok)
+	assert(checkedSource("type N struct{value int};func f(){const key=1;println(Map[int,N]{key:{value:2}},List[N]{{value:3}})}").ok)
+	for _, source := range (List[string]{
+		"type N struct{x int};func f(){n:=N{};println(n.y)}",
+		"type N struct{x int};func f(){_ = N{x:true}}",
+		"type N struct{x int};func f(){_ = N{y:1}}",
+		"type N struct{x int};func f(){_ = N{x:1,x:2}}",
+		"type A struct{x int};type B struct{x int};func f(){a:=A{};a=B{}}",
+		"func f(){_ = Map[bool,int]{}}",
+		"func f(){_ = Map[string,int]{1:2}}",
+		"func f(){_ = Map[string,int]{missing:2}}",
+		"func f(){_ = List[int]{true}}",
+		"func f(){_ = get(Map[int,int]{},\"x\")}",
+		"func f(){_ = prepend(true,List[int]{})}",
+		"func f(){_ = head[string](List[int]{})}",
+		"func f(){_ = put(Map[int,int]{},1,true)}",
+		"func f(){var p *int;p=true}",
+		"func f(){x:=1;_ = *x}",
+		"func f(){for _,v:=range 1{println(v)}}",
+		"func f(){xs:=List[int]{};for _,v:=range xs{var b bool=v;println(b)}}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+}
+
+func TestOTPTypesAndShadowing() {
+	assert(checkedSource("func worker(n int){send(self(),n)};func f(){var Pid int;println(Pid);p:=spawn(worker,1);m:=monitor(p);println(wait(m,100).reason,receive[int](0).ok)}").ok)
+	assert(checkedSource("func println(x int){};func f(){println(1);head:=1;println(head)}").ok)
+	for _, source := range (List[string]{
+		"func worker(n int){};func f(){spawn(worker,true)}",
+		"func worker(n int)int{return n};func f(){spawn(worker,1)}",
+		"func worker(){};func f(){spawn(worker,1)}",
+		"func f(){send(1,2)}",
+		"func f(){receive[int](true)}",
+		"func f(){receive(0)}",
+		"func f(){wait(self(),0)}",
+		"func f(){supervise(startSupervisor(1,1000),1,self,1,ChildOptions{})}",
+		"func f(){head:=1;head(List[int]{})}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+}
+
+func TestDeclarationsAndNil() {
+	assert(checkedSource("const A=B;const B=1;func f()int{return A}").ok)
+	assert(checkedSource("const (A,B=B,1);func f(){println(A,B)}").ok)
+	assert(checkedSource("func f(){println(head[int](nil).ok,get[string,int](nil,\"bean\").ok)}").ok)
+	assert(checkedSource("type N struct{next *N;xs List[N]};func f(){println(List[*N]{{}})}").ok)
+	for _, source := range (List[string]{
+		"const A=B;const B=A",
+		"const _ = 1+true",
+		"const int=1;func f(x int){}",
+		"func f(){x:=1;const A=x;println(A)}",
+		"type N struct{value N}",
+		"type N struct{value Delivery[N]}",
+		"type N struct{xs List[int]};func f(){println(N{}==N{})}",
+		"func f(){println(nil)}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+}
+
+func TestCollectionInference() {
+	for _, source := range (List[string]{
+		"func f(){println(prepend(1,nil),prepend(true,nil),put(nil,1,2),put(nil,\"bean\",false))}",
+		"func f(){println(get[int](Map[int,string]{},1).ok,remove[int](Map[int,string]{},1),put[int](nil,1,\"bean\"),put[string](Map[string,int]{},\"bean\",1))}",
+		"func f(){head[int](List[int]{});(get[int,string])(Map[int,string]{},1)}",
+	}) {
+		assert(checkedSource(source).ok)
+	}
+	for _, source := range (List[string]{
+		"func f(){println((get[int])(Map[int,string]{},1))}",
+		"func f(){println((put[string])(nil,\"bean\",1))}",
+		"func f(){println(prepend(nil,nil))}",
+		"func f(){println(get[int](nil,1))}",
+		"func f(){println(put[bool](nil,true,1))}",
+		"func f(){println(get[string](Map[int,int]{},1))}",
+		"func f(){println(put[int,string](Map[int,int]{},1,2))}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+}
+
+func TestGenericCalleeParentheses() {
+	assert(checkedSource("func f(){println(((get[int,string]))(Map[int,string]{},1).ok)}").ok)
+	assert(checkedSource("func f(){println((put[int,string])(nil,1,\"bean\"),(remove[int,string])(Map[int,string]{},1))}").ok)
+	for _, source := range (List[string]{
+		"func f(){println((get)[int](Map[int,string]{},1))}",
+		"func f(){println((put)[int](nil,1,\"bean\"))}",
+		"func f(){println((remove)[int](Map[int,string]{},1))}",
+		"func f(){println((get)[int,string](Map[int,string]{},1))}",
+		"func f(){println((put)[int,string](nil,1,\"bean\"))}",
+		"func f(){println((remove)[int,string](Map[int,string]{},1))}",
+		"func f(){println(((get))[int](Map[int,string]{},1))}",
+		"func f(){println((head)[int](List[int]{}))}",
+		"func f(){println((receive)[int](0))}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+}
+
+func TestCompositeAddresses() {
+	for _, source := range (List[string]{
+		"type N struct{x int};func f(){p:=&((N{x:1}));q:=&(List[int]{1});println(p.x,len(*q))}",
+		"func len(x int)int{return x};func f(){(len)(1)}",
+	}) {
+		assert(checkedSource(source).ok)
+	}
+	for _, source := range (List[string]{
+		"func f(){(int)(1)}",
+		"func f(){((len))(\"bean\")}",
+		"func f(){(append)(List[int]{},1)}",
+		"func f(){(*int)(nil)}",
+		"func f(){(new)(int)}",
+		"func f(){(make)(Map[int,int])}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+}
+
+func TestBlankAssignments() {
+	for _, source := range (List[string]{
+		"func f(){_ += 1}",
+		"func f(){_ /= 2}",
+		"func f(){_ <<= 2}",
+		"func f(){_ += true}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+}
+
+func TestConstructionCalls() {
+	for _, source := range (List[string]{
+		"func f(){println(make(List[int],2),make(List[int],2,3),make(Map[int,int]),make(Map[int,int],2),new(int))}",
+	}) {
+		assert(checkedSource(source).ok)
+	}
+	for _, source := range (List[string]{
+		"func f(){println(make(List[int]))}",
+		"func f(){println(make(List[int],true))}",
+		"func f(){println(make(List[int],2,false))}",
+		"func f(){println(make(List[int],1,2,3))}",
+		"func f(){println(make(Map[int,int],false))}",
+		"func f(){println(make(Map[int,int],1,2))}",
+		"func f(){println(new(int,1))}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+}
+
+func TestSwitchAndEntrySignatures() {
+	for _, source := range (List[string]{
+		"func f(){var xs List[int];switch xs{case nil:println(1)};var m Map[int,int];switch m{case nil:println(1)}}",
+		"func main(){};func init(){}",
+	}) {
+		assert(checkedSource(source).ok)
+	}
+	for _, source := range (List[string]{
+		"func f(){m:=Map[int,int]{};switch m{case Map[int,int]{}:println(1)}}",
+		"func f(){xs:=List[int]{};switch xs{case List[int]{}:println(1)}}",
+		"type N struct{xs List[int]};func f(){n:=N{};switch n{default:println(1)}}",
+		"type N struct{m Map[int,int]};func f(){n:=N{};switch n{case N{}:println(1)}}",
+		"func main(x int){println(x)}",
+		"func main()int{return 1}",
+		"func init(x int){println(x)}",
+		"func init()bool{return true}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+}

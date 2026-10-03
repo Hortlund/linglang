@@ -69,6 +69,10 @@ func (c *compiler) listBuiltin(call *ast.CallExpr) (string, bool, error) {
 	if _, builtin := c.info.Uses[id].(*types.Builtin); !builtin || (id.Name != "len" && id.Name != "append") {
 		return "", false, nil
 	}
+	if basic, ok := c.info.TypeOf(call.Args[0]).Underlying().(*types.Basic); ok && basic.Kind() == types.String && id.Name == "len" {
+		value, err := c.expression(call.Args[0])
+		return c.ordered([]string{value}, func(v []string) string { return "byte_size(" + v[0] + ")" }), true, err
+	}
 	if _, _, dictionary := c.mapTypes(c.info.TypeOf(call.Args[0])); dictionary && id.Name == "len" {
 		value, err := c.expression(call.Args[0])
 		return c.ordered([]string{value}, func(v []string) string {
@@ -76,7 +80,7 @@ func (c *compiler) listBuiltin(call *ast.CallExpr) (string, bool, error) {
 		}), true, err
 	}
 	if _, list := c.listElement(c.info.TypeOf(call.Args[0])); !list {
-		return "", true, c.errorf(call, "%s currently requires a List[T] (len also accepts Map[K,V])", id.Name)
+		return "", true, c.errorf(call, "%s currently requires a List[T] (len also accepts Map[K,V] and string)", id.Name)
 	}
 	var values []string
 	for _, arg := range call.Args {

@@ -1,0 +1,73 @@
+package main
+
+func queue(args QueueArgs) {
+    var jobs List[Job]
+    var pending List[Job]
+    var results Map[int,Result]
+    var workers Map[int,WorkerState]
+    var assigned Map[int,Job]
+    submitted := false
+    restarts := 0
+    crashOnce := args.crash
+    running := 0
+    peak := 0
+    for {
+        cmd := receive[Command](-1).value
+        switch cmd.kind {
+        case Enqueue:
+            if !submitted {
+                jobs = cmd.jobs
+                pending = jobs
+                submitted = true
+            }
+        case WorkerReady:
+            if cmd.slot >= 1 && cmd.slot <= args.workers && cmd.worker != nil {
+                previous := get(workers, cmd.slot)
+                if !previous.ok || previous.value.pid != cmd.worker {
+                    if previous.ok {
+                        restarts++
+                        retry := get(assigned, cmd.slot)
+                        if retry.ok {
+                            pending = prepend(retry.value, pending)
+                            assigned = remove(assigned, cmd.slot)
+                            running--
+                        }
+                    }
+                    workers = put(workers, cmd.slot, WorkerState{pid: cmd.worker})
+                }
+            }
+        case JobFinished:
+            current := get(workers, cmd.slot)
+            job := get(assigned, cmd.slot)
+            if current.ok && job.ok && current.value.pid == cmd.worker &&
+                cmd.result.id == job.value.id && cmd.result.limit == job.value.limit {
+                results = put(results, cmd.result.id, cmd.result)
+                assigned = remove(assigned, cmd.slot)
+                workers = put(workers, cmd.slot, WorkerState{pid: cmd.worker})
+                running--
+            }
+        }
+        if submitted && len(results) == len(jobs) {
+            var ordered List[Result]
+            for _, job := range jobs { ordered = append(ordered, get(results, job.id).value) }
+            send(args.parent, Summary{results: ordered, restarts: restarts, peak: peak})
+            return
+        }
+        // Wait for the whole pool before dispatching its first batch.
+        if submitted && len(workers) == args.workers {
+            for slot := 1; slot <= args.workers; slot++ {
+                current := get(workers, slot).value
+                if current.job == 0 && len(pending) > 0 {
+                    job := head(pending).value
+                    pending = tail(pending)
+                    assigned = put(assigned, slot, job)
+                    workers = put(workers, slot, WorkerState{pid: current.pid, job: job.id})
+                    send(current.pid, Work{job: job, crash: crashOnce})
+                    crashOnce = false
+                    running++
+                    if running > peak { peak = running }
+                }
+            }
+        }
+    }
+}

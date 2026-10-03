@@ -110,74 +110,80 @@ func TestPrimeLabCLI(t *testing.T) {
 			t.Fatalf("literal arguments: got %q (%v), want %q", output, err, want)
 		}
 	})
-	for _, baseline := range []bool{false, true} {
-		for _, empty := range []bool{false, true} {
-			name := "optimized"
-			if baseline {
-				name = "baseline"
-			}
-			if empty {
-				name += "_empty"
-			}
-			t.Run(name, func(t *testing.T) {
-				work := t.TempDir()
-				input := filepath.Join(work, "雪 jobs.txt")
-				output := filepath.Join(work, "雪 report.csv")
-				jobs := "# test batch\r\n100\r\n\xff\r\n 300 # inline comment\r\nnope\n1\n100001\n9223372036854775808\n\xe2\x82\n10\n"
-				want := "job,limit,prime_count,largest_prime\n1,100,25,97\n2,300,62,293\n3,10,4,7\n"
-				completed := "Completed: 3 | Worker restarts: 1"
-				if empty {
-					jobs = "# no jobs\n \t\r\n"
-					want = "job,limit,prime_count,largest_prime\n"
-					completed = "Completed: 0 | Worker restarts: 0"
-				}
-				if err := os.WriteFile(input, []byte(jobs), 0600); err != nil {
-					t.Fatal(err)
-				}
-				// Existing reports must be truncated, including an empty batch.
-				if err := os.WriteFile(output, []byte(strings.Repeat("old report", 100)), 0600); err != nil {
-					t.Fatal(err)
-				}
-				arguments := []string{"run", "--gc-stress", "--gc-stats"}
+	for _, target := range []struct{ name, path string }{
+		{"single_file", source},
+		{"directory", strings.TrimSuffix(source, ".lang")},
+	} {
+		source := target.path
+		for _, baseline := range []bool{false, true} {
+			for _, empty := range []bool{false, true} {
+				name := "optimized"
 				if baseline {
-					arguments = append(arguments, "--no-opt")
+					name = "baseline"
 				}
-				arguments = append(arguments, source, input, output)
-				runCtx, runCancel := context.WithTimeout(context.Background(), 20*time.Second)
-				defer runCancel()
-				cmd := exec.CommandContext(runCtx, binary, arguments...)
-				cmd.Dir = work
-				var stdout, stderr bytes.Buffer
-				cmd.Stdout, cmd.Stderr = &stdout, &stderr
-				if err := cmd.Run(); err != nil {
-					t.Fatalf("run prime lab: %v\n%s\n%s", err, stdout.String(), stderr.String())
+				if empty {
+					name += "_empty"
 				}
-				messages := []string{completed, "Supervisor stopped: true", "Saved CSV: " + output}
-				if !empty {
-					messages = append(messages, "Loaded jobs: 3 | Skipped: 6", "Pool workers: 3 | Peak active: 3",
-						"Skipping line 3 (expected an integer from 2 to 100000)",
-						"Skipping line 9 (expected an integer from 2 to 100000)")
-				} else {
-					messages = append(messages, "Pool workers: 3 | Peak active: 0")
-				}
-				if !utf8.Valid(stdout.Bytes()) {
-					t.Fatalf("diagnostics contain malformed UTF-8: %q", stdout.Bytes())
-				}
-				for _, message := range messages {
-					if !strings.Contains(stdout.String(), message) {
-						t.Fatalf("missing %q:\n%s", message, stdout.String())
+				t.Run(target.name+"_"+name, func(t *testing.T) {
+					work := t.TempDir()
+					input := filepath.Join(work, "雪 jobs.txt")
+					output := filepath.Join(work, "雪 report.csv")
+					jobs := "# test batch\r\n100\r\n\xff\r\n 300 # inline comment\r\nnope\n1\n100001\n9223372036854775808\n\xe2\x82\n10\n"
+					want := "job,limit,prime_count,largest_prime\n1,100,25,97\n2,300,62,293\n3,10,4,7\n"
+					completed := "Completed: 3 | Worker restarts: 1"
+					if empty {
+						jobs = "# no jobs\n \t\r\n"
+						want = "job,limit,prime_count,largest_prime\n"
+						completed = "Completed: 0 | Worker restarts: 0"
 					}
-				}
-				for _, message := range []string{"live_cells => 0", "root_frames => 0"} {
-					if !strings.Contains(stderr.String(), message) {
-						t.Fatalf("missing %q:\n%s", message, stderr.String())
+					if err := os.WriteFile(input, []byte(jobs), 0600); err != nil {
+						t.Fatal(err)
 					}
-				}
-				report, err := os.ReadFile(output)
-				if err != nil || string(report) != want {
-					t.Fatalf("report: got %q (%v), want %q", report, err, want)
-				}
-			})
+					// Existing reports must be truncated, including an empty batch.
+					if err := os.WriteFile(output, []byte(strings.Repeat("old report", 100)), 0600); err != nil {
+						t.Fatal(err)
+					}
+					arguments := []string{"run", "--gc-stress", "--gc-stats"}
+					if baseline {
+						arguments = append(arguments, "--no-opt")
+					}
+					arguments = append(arguments, source, input, output)
+					runCtx, runCancel := context.WithTimeout(context.Background(), 20*time.Second)
+					defer runCancel()
+					cmd := exec.CommandContext(runCtx, binary, arguments...)
+					cmd.Dir = work
+					var stdout, stderr bytes.Buffer
+					cmd.Stdout, cmd.Stderr = &stdout, &stderr
+					if err := cmd.Run(); err != nil {
+						t.Fatalf("run prime lab: %v\n%s\n%s", err, stdout.String(), stderr.String())
+					}
+					messages := []string{completed, "Supervisor stopped: true", "Saved CSV: " + output}
+					if !empty {
+						messages = append(messages, "Loaded jobs: 3 | Skipped: 6", "Pool workers: 3 | Peak active: 3",
+							"Skipping line 3 (expected an integer from 2 to 100000)",
+							"Skipping line 9 (expected an integer from 2 to 100000)")
+					} else {
+						messages = append(messages, "Pool workers: 3 | Peak active: 0")
+					}
+					if !utf8.Valid(stdout.Bytes()) {
+						t.Fatalf("diagnostics contain malformed UTF-8: %q", stdout.Bytes())
+					}
+					for _, message := range messages {
+						if !strings.Contains(stdout.String(), message) {
+							t.Fatalf("missing %q:\n%s", message, stdout.String())
+						}
+					}
+					for _, message := range []string{"live_cells => 0", "root_frames => 0"} {
+						if !strings.Contains(stderr.String(), message) {
+							t.Fatalf("missing %q:\n%s", message, stderr.String())
+						}
+					}
+					report, err := os.ReadFile(output)
+					if err != nil || string(report) != want {
+						t.Fatalf("report: got %q (%v), want %q", report, err, want)
+					}
+				})
+			}
 		}
 	}
 	t.Run("file_failures", func(t *testing.T) {

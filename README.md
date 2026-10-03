@@ -1,5 +1,7 @@
 # linglang
 
+![Linglang language](https://img.shields.io/badge/language-Linglang-7B3FE4)
+
 a programming language that answers the question nobody fucking asked.
 
 called linglang because i wanted to learn Chinese but somehow installed Erlang instead.
@@ -13,10 +15,10 @@ bring Go 1.23+ and Erlang/OTP. `erl` and `erlc` must be on your PATH.
 if you don't have a PATH, go outside and find one.
 
 ```sh
-go run ./cmd/linglang run examples/beans.lang
+go run ./cmd/linglang run examples/counter.lang
 ```
 
-you have now installed a bean situation.
+you have now installed a situation.
 
 ## production ready
 
@@ -80,7 +82,7 @@ it set out to do.
 `int` is a signed 64-bit integer. it goes from -9223372036854775808 to
 9223372036854775807. going further wraps around. you have arrived at the other number.
 
-there are no floats. a bean cannot be 1.7 beans. finish your bean.
+there are no floats. decimals were a mistake.
 
 `bool` is `true` or `false`. for a third opinion, start another process.
 
@@ -92,13 +94,13 @@ neither does the compiler.
 variables can vary. we checked.
 
 ```go
-bean := 1
-bean = 2
-bean++
-println(bean) // 3. this is getting out of hand.
+n := 1
+n = 2
+n++
+println(n) // 3. this is getting out of hand.
 ```
 
-use `var bean int` to start at zero. bool starts at `false`, string at `""`,
+use `var n int` to start at zero. bool starts at `false`, string at `""`,
 and pointers and process handles at `nil`. structs start with zero in each field.
 the computer has done the bare minimum.
 
@@ -107,39 +109,39 @@ the computer has done the bare minimum.
 `const` is for numbers that have stopped cooperating.
 
 ```go
-const Bean = 1
+const One = 1
 const (
-    AskForBean = iota + 1
-    ThreatenBean
-    ForgetBean
+    Ask = iota + 1
+    Threaten
+    Forget
 )
-println(Bean, AskForBean, ThreatenBean, ForgetBean) // 1 1 2 3
+println(One, Ask, Threaten, Forget) // 1 1 2 3
 ```
 
 `iota` counts the declarations so you don't have to. your contribution is naming them.
 constants work at package and function scope, in groups, with constant expressions
 and multiple names. supported types are `int`, `bool`, `string`, and untyped
 integer, rune, bool, and string constants. a large untyped integer can exist at
-compile time, but must fit in an `int` when used as one. big bean, small door.
+compile time, but must fit in an `int` when used as one. big number, small door.
 
 ## decisions
 
-`switch` checks cases from left to right. the first match wins. this is also how
-the bean became legally mine.
+`switch` checks cases from left to right. the first match wins. the argument is over
+before the other cases get a turn.
 
 ```go
 const (
-    AskForBean = iota + 1
-    ThreatenBean
-    ForgetBean
+    Ask = iota + 1
+    Threaten
+    Forget
 )
-switch demand := ThreatenBean; demand {
-case AskForBean, ThreatenBean:
+switch demand := Threaten; demand {
+case Ask, Threaten:
     println("no")
-case ForgetBean:
-    println("what bean")
+case Forget:
+    println("what argument")
 default:
-    panic("unrecognized bean activity")
+    panic("unrecognized nonsense")
 }
 ```
 
@@ -157,16 +159,16 @@ are unsupported. please fall somewhere else.
 lists happen when there is more than one thing. deeply unfortunate.
 
 ```go
-beans := List[string]{"bean"}
-oldBeans := beans
-beans = append(beans, "bean")
-beans = prepend("suspicious bean", beans)
-for i, bean := range beans {
-    println(i, bean)
+items := List[string]{"thing"}
+oldItems := items
+items = append(items, "thing")
+items = prepend("suspicious thing", items)
+for i, item := range items {
+    println(i, item)
 }
-println(len(oldBeans)) // 1. the past refuses to help.
-println(head(beans).value, head(beans).ok)
-beans = tail(beans)
+println(len(oldItems)) // 1. the past refuses to help.
+println(head(items).value, head(items).ok)
+items = tail(items)
 ```
 
 `List[T]` is an immutable native Erlang list. assignment and function arguments
@@ -180,19 +182,20 @@ the element's zero value and `false`. `tail` drops the head and leaves empty
 lists alone. `len` counts the things. apparently we need a function for that.
 
 prepend, head, and tail take constant time. append copies the left list.
-len walks it. range traverses once. bean location affects bean speed.
+len walks it. range traverses once. where you put the thing affects how fast
+you find it. tragic.
 
-`var beans List[int]` is nil. `List[int]{}` is empty but non-nil. both behave
+`var items List[int]` is nil. `List[int]{}` is empty but non-nil. both behave
 as empty lists. one has made slightly more effort.
 
 range accepts index/value bindings, existing identifiers with `=`, blank
 targets, or no bindings. its source is evaluated once and kept as a snapshot.
 variables declared with `:=` get fresh identity each iteration. when ranging
 over a literal directly, put parentheses around it:
-`for _, bean := range (List[int]{1, 2}) { ... }`. the bean needs a fence.
+`for _, item := range (List[int]{1, 2}) { ... }`. the literal needs a fence.
 
 indexing, indexed writes, slicing, keyed list literals, raw slices, and arrays
-are unsupported. you may look at the first bean and proceed from there.
+are unsupported. you may look at the first item and proceed from there.
 
 ## maps
 
@@ -229,11 +232,11 @@ key types are unsupported. this map has no roads.
 two variables can point at the same thing. this saves you from having two things.
 
 ```go
-bean := 1
-mine := &bean
+n := 1
+mine := &n
 yours := mine
 *yours = 2
-println(bean, *mine, mine == yours) // 2 2 true. your bean was my bean.
+println(n, *mine, mine == yours) // 2 2 true. sharing has consequences.
 ```
 
 structs copy by value; pointers keep the identity of a mutable managed cell.
@@ -242,7 +245,7 @@ through structs, lists, and maps, including cycles. unused cells get collected.
 the collector cannot fix this README because somebody is still reading it.
 
 pointers stay in their creating process. trying to send one to another process
-is a compile error. get your own bean.
+is a compile error. get your own number.
 
 ```sh
 go run ./cmd/linglang run examples/references.lang
@@ -308,10 +311,10 @@ go run ./cmd/linglang run --gc-stress examples/jobqueue.lang
 
 the job queue squares three numbers and kills a worker once. OTP replaces him
 and the queue retries the unfinished job. delivery is at least once, so jobs
-with side effects must tolerate retries. do not use this to feed the bean twice.
+with side effects must tolerate retries. do not use this to pay rent twice.
 
 queue state is in memory. worker crashes don't lose it. queue or VM exits do.
-the bean has no backup bean.
+your state has left the building.
 
 ## accidentally useful
 
@@ -319,7 +322,7 @@ the prime lab reads a file, skips bad jobs, counts primes on three supervised
 workers, and writes a CSV. sorry. we tried to keep it stupid.
 
 ```sh
-go run ./cmd/linglang run examples/prime_lab.lang examples/prime_jobs.txt prime-results.csv
+go run ./cmd/linglang run examples/prime_lab/ examples/prime_jobs.txt prime-results.csv
 ```
 
 the first worker deliberately crashes. OTP replaces it. the queue retries its
@@ -348,6 +351,104 @@ the crash reports are expected. the workers and supervisor stop before exit.
 state is still in memory and retries still mean at least once execution.
 writing a CSV has not made this a bank.
 
+## more files
+
+your file got too big. put it in several files. now you have several problems.
+
+```text
+examples/prime_lab/
+    main.lang
+    messages.lang
+    queue.lang
+    workers.lang
+```
+
+pass a directory to load its `.lang` files in filename order. every file says
+`package main`. functions, structs, and constants can use each other across files.
+there must be one `func main()`. two mains must settle this outside.
+
+```sh
+go run ./cmd/linglang check examples/prime_lab/
+go run ./cmd/linglang run examples/prime_lab/
+go run ./cmd/linglang build -o _build examples/prime_lab/
+go run ./cmd/linglang emit examples/prime_lab/
+```
+
+`check` checks syntax, types, and supported language features without running
+anything or writing build files. it only needs Go. the guys stay asleep.
+errors point to the file and line that did it.
+
+only immediate `.lang` files count. other files and subdirectories are ignored.
+passing a file still loads just that file. `examples/prime_lab.lang` is the
+standalone version if you want all your problems in one place. imports remain
+unsupported. the folder is one program, compiled into one BEAM module with the
+same native OTP supervision.
+
+## take linglang outside
+
+`pack` puts your program and the linglang runtime in one executable escript.
+your program is portable now. somebody else's problem.
+
+```sh
+go run ./cmd/linglang pack -o bin/prime-lab examples/prime_lab/
+./bin/prime-lab examples/prime_jobs.txt prime-results.csv
+```
+
+copy the executable and your input data somewhere else and run it there.
+it needs a compatible Erlang/OTP installation with `escript` and `erl` on PATH.
+it does not need Go, linglang, `erlc`, or the source files. OTP still handles
+processes, mailboxes, and supervisor restarts. the guys travelled with the program.
+
+without `-o`, a file `counter.lang` produces `counter.escript` in your current
+directory; a directory `prime_lab/` produces `prime_lab.escript`. output parents
+are created automatically. an existing executable is replaced after a successful
+pack. packing over a source file is rejected. the program cannot eat its own recipe.
+
+`--no-opt`, `--gc-stress`, and `--gc-stats` go before the source path and are
+baked into the executable. arguments after the executable's name are all program
+arguments, including things that look like flags. `args()` excludes the
+executable name in main and workers. relative data paths use the current working
+directory; input data is not bundled. bring your own numbers.
+
+on Windows, invoke the package with `escript program.escript [args...]`.
+the format is OTP's [archive escript](https://www.erlang.org/doc/apps/erts/escript_cmd.html).
+this packages your program, not an Erlang installation.
+
+## bring the whole computer
+
+their computer does not have Erlang. apparently this is allowed.
+`release` bundles your compiled program, the BEAM runtime, and the OTP libraries
+it uses into a `.tar.gz`. unpack it and run. the guys brought their own house.
+
+```sh
+go run ./cmd/linglang release -o dist/prime-lab.tar.gz examples/prime_lab/
+mkdir -p _release/prime-lab
+tar -xzf dist/prime-lab.tar.gz -C _release/prime-lab
+./_release/prime-lab/bin/run examples/prime_jobs.txt prime-results.csv
+```
+
+send the archive and your input data. the receiving machine needs neither Go nor
+an Erlang installation. native OTP supervision, mailboxes, and worker restarts
+still work. the VM is included. we did not evict it.
+you can symlink `bin/run` into your PATH too. the launcher remembers where it lives.
+
+this currently supports Linux and macOS. build on the OS and CPU architecture
+you will run on, with compatible system libraries on the receiving machine.
+it bundles your installed Erlang runtime; it does not cross-compile that runtime
+or bundle the operating system. the archive's `README.txt` records the target and
+OTP version. Erlang's license is included too. the runtime has paperwork.
+
+without `-o`, `counter.lang` produces `counter-<os>-<arch>.tar.gz`; a directory uses
+its directory name. `--no-opt`, `--gc-stress`, and `--gc-stats` work just like
+`pack`. all arguments after `bin/run` go to the program, and relative data paths
+use your working directory. input data is still your problem.
+
+building requires Go and Erlang/OTP, including `erl`, `erlc`, and OTP's release
+tools. output parents are created automatically. a failed release keeps the
+previous archive, and source files cannot be used as output. this is an OTP
+release for running the program to completion; daemon management and hot upgrades
+are not wired up yet.
+
 ## outside the computer
 
 files are where bytes live when the program is not looking at them.
@@ -356,7 +457,7 @@ so this is convenient.
 
 | function | result | what the computer does |
 | --- | --- | --- |
-| `args()` | `List[string]` | arguments after the source path, in order; excludes the source path and CLI flags. |
+| `args()` | `List[string]` | program arguments in order; excludes the source/executable name and compiler flags. |
 | `readFile(path)` | `TextResult` | reads the whole file. it has committed to reading. |
 | `writeFile(path, text)` | `IOResult` | creates or overwrites a file. parent directories must already exist. |
 | `split(text, separator)` | `List[string]` | splits on exact separator bytes and keeps empty pieces. an empty separator raises `linglang_empty_separator`. |
@@ -373,11 +474,28 @@ decided to explain itself in small noises.
 ```go
 number := parseInt(trim(" 1 "))
 if !number.ok { panic(number.reason) }
-println(formatInt(number.value) + " bean")
+println(formatInt(number.value) + " things")
 ```
 
 strings and file contents preserve bytes, including UTF-8. split matches bytes;
 trim handles ASCII whitespace. Unicode spaces get to stay. they came all this way.
+
+linglang can now look at individual bytes. this was a difficult promotion.
+
+| function | what it does |
+| --- | --- |
+| `len(text)` | counts bytes, including for strings returned by functions. |
+| `byteAt(text, index)` | returns the byte at a zero-based index, as an `int` from 0 to 255. |
+| `slice(text, start, end)` | returns bytes from start up to, but excluding, end. |
+| `join(parts, separator)` | joins a `List[string]` in one pass; nil and empty lists give `""`. |
+| `runeAt(text, offset)` | decodes one UTF-8 scalar into a `RuneResult` with `.value`, `.width`, and `.ok`. |
+| `isLetter(value)` / `isDigit(value)` | checks Unicode letters / decimal digits by code point. |
+
+byte indexes and slice bounds are checked. invalid bounds fail the current process;
+they do not quietly select a different byte. slices preserve bytes and may split
+a UTF-8 character. `runeAt` accepts the end offset: `.width == 0` and `.ok == false`
+means EOF. malformed UTF-8 gives U+FFFD, width 1, and false; a correctly encoded
+U+FFFD gives true. the replacement character has identification.
 
 file operations use the [OTP file module](https://www.erlang.org/doc/apps/kernel/file.html).
 CLI arguments are passed separately using [`-extra`](https://www.erlang.org/doc/apps/erts/init.html).
@@ -390,39 +508,227 @@ run commands from the repository root. flags go before the source path.
 program arguments go after it. the computer cares about this.
 
 ```sh
-go run ./cmd/linglang run --gc-stress --gc-stats examples/beans.lang
-go run ./cmd/linglang run --no-opt examples/beans.lang
-go run ./cmd/linglang build -o _build examples/beans.lang
-go run ./cmd/linglang emit examples/beans.lang
+go run ./cmd/linglang check examples/counter.lang
+go run ./cmd/linglang run --gc-stress --gc-stats examples/counter.lang
+go run ./cmd/linglang run --no-opt examples/counter.lang
+go run ./cmd/linglang build -o _build examples/counter.lang
+go run ./cmd/linglang pack -o bin/counter examples/counter.lang
+go run ./cmd/linglang release -o dist/counter.tar.gz examples/counter.lang
+go run ./cmd/linglang emit examples/counter.lang
 ```
 
 `--gc-stress` collects at every safe point. `--gc-stats` prints the managed-heap
-statistics. `--no-opt` uses the original compiler backend. same beans, more cells.
-`build` writes BEAM modules; `emit` prints generated Erlang. this is where the
-Erlang was hiding.
+statistics. `--no-opt` uses the original compiler backend. same program, more cells.
+`build` writes BEAM modules; `pack` bundles an executable; `release` includes the
+VM too; `emit` prints generated Erlang. this is where the Erlang was hiding.
 
 ## things you cannot do
 
-imports, multiple source files, closures, floats, arrays, raw Go slices and maps,
+imports, closures, floats, arrays, raw Go slices and maps,
 list/map indexing, and map range. this is a Go-like subset with BEAM underneath.
 it has `package main`, functions, structs, mutable locals, pointers, and enough
 control flow to cause an incident. it is not all of Go. some of Go escaped.
 
 ## tests
 
+your code has been accused of being wrong. put the allegations in `math_test.lang`:
+
+```go
+package main
+
+func TestMath() {
+    assert(1 + 1 == 2)
+}
+```
+
+```sh
+go run ./cmd/linglang test bootstrap/checker
+go run ./cmd/linglang test --no-opt --gc-stress --gc-stats bootstrap/checker
+go run ./cmd/linglang test --timeout 5s bootstrap/checker
+```
+
+these commands run the Linglang type checker tests. the checker checks the
+checker. somebody has to.
+
+`test` loads the immediate `.lang` files in one directory, including `_test.lang`.
+functions in those test files whose names start with `Test` run in name order.
+they take no arguments, type parameters, or receivers, and return nothing.
+helpers can live in either kind of file. `main` is optional and never runs during
+tests. an explicit test file loads just that file. no path means the current directory.
+normal directory commands (`run`, `check`, `build`, `pack`, `release`, `emit`)
+skip `_test.lang` files. the allegations do not ship with the program.
+
+`assert(condition)` evaluates its bool once. false fails the test with the original
+source filename and line. it also works in ordinary programs. the computer has
+received a complaint.
+
+each test runs in a fresh BEAM VM. mailboxes, supervisors, and leftover workers
+cannot wander into the next test. files still use your working directory.
+the default timeout is 30 seconds per test, including VM startup and shutdown;
+`--timeout` accepts positive durations such as `5s` or `500ms`. a timeout kills
+the test VM, reports failure, and runs the next test. failures produce a nonzero
+exit status. a suite with no tests fails too. doing nothing is not passing.
+
+## arrange the code
+
+```sh
+go run ./cmd/linglang fmt bootstrap/checker
+go run ./cmd/linglang fmt --check bootstrap/checker
+```
+
+`fmt` uses Go-style formatting and keeps comments and file permissions.
+it recursively formats `.lang` files, including tests. no path means `.`;
+multiple files or directories work too. `.git`, `_build`, `_release`, `bin`,
+and `dist` are skipped during directory discovery, as are symlinks. an explicitly
+named file symlink formats its target and keeps the link. all selected files
+are parsed before any writes. a syntax error cannot leave half the code tidied.
+
+`--check` lists files that need formatting and exits nonzero without changing
+them. neither formatting nor checking formatting needs Erlang. your code can
+stand straight without a virtual machine.
+
+## linglang in vscode
+
+linglang has colours. red squiggles too. we paid extra for those.
+
+the extension lives in `editors/vscode` in this repo so the grammar and compiler
+can change together. it adds highlighting, snippets, syntax/name/type errors,
+formatting, and an outline. unsaved `.lang` files in a directory are checked as
+one package, including tests and shared bootstrap sources. put a
+`.linglang-standalone` file in a directory of independent programs to check each
+open file separately. `examples` and `benchmarks` already have one; their
+subdirectories still work as packages. editor analysis does not need Erlang;
+running your program still does.
+
+```sh
+cd editors/vscode
+npm ci
+npm test
+npm run package
+```
+
+use Node.js 22+ and Go. install the file in `dist/` through VS Code's
+**Extensions: Install from VSIX…**. the default package contains the server for
+your machine; `npm run package -- linux-x64` chooses another target.
+`linglang.serverPath` can point at your own compiler build. the server also works
+with other LSP editors through `linglang lsp` over stdio.
+
+advanced BEAM/message checks still happen when compiling. completion, hover,
+rename, and debugging come later. [editor instructions](editors/vscode/README.md)
+include the real VS Code smoke test. the squiggle is employed now.
+
+## test the compiler
+
 ```sh
 go test ./...
 go vet ./...
+go test ./internal/compiler -run='^$' -fuzz='^FuzzCompile$' -fuzztime=10s -parallel=2
 ```
 
 the tests require Erlang/OTP too. both compiler backends are exercised, including
-GC stress and supervisor failure paths. we have verified that the guy dies.
+GC stress and supervisor failure paths. the compiler fuzz target accepts inputs
+up to 16 KiB and checks that both backends agree on what compiles. it does not
+launch a VM for each input. we have verified that the guy dies.
+
+CI is configured to run the full suite on Linux and macOS with OTP 27, 28, and 29,
+using Go 1.23. it also runs the language tests on both backends and a bounded compiler
+fuzz run. a separate job checks the editor grammar and builds a Linux VSIX.
+linglang now has six computers checking its paperwork.
+
+## linglang reads linglang
+
+the first bootstrap tool is a lexer written in Linglang. it turns source into
+tokens with raw text, byte offsets, and line/column locations. it can read its
+own source. linglang has discovered literacy. this will end badly.
+
+```sh
+go build -o bin/linglang ./cmd/linglang
+./bin/linglang run bootstrap/lexer bootstrap/lexer/tokens.lang
+./bin/linglang test --gc-stress bootstrap/lexer
+./bin/linglang fmt --check bootstrap/lexer
+```
+
+to run the lexer without Go or the seed compiler around:
+
+```sh
+./bin/linglang pack -o bin/linglang-lexer bootstrap/lexer
+./bin/linglang-lexer bootstrap/lexer/tokens.lang
+```
+
+the packed lexer needs Erlang/OTP. its tokenization is all Linglang code;
+Go's scanner is used only as a compatibility oracle in tests. comments, Unicode
+identifiers, integer literals, quoted text, operators, and automatic semicolons
+work. floats are still somebody else's problem.
+
+linglang now has a parser too. words go in. a syntax tree comes out. unfortunately
+this counts as thinking.
+
+```sh
+./bin/linglang run bootstrap/parser bootstrap/parser/expressions.lang
+./bin/linglang test --gc-stress bootstrap/parser
+./bin/linglang test --no-opt --gc-stress bootstrap/parser
+./bin/linglang fmt --check bootstrap/parser
+./bin/linglang pack -o bin/linglang-parser bootstrap/parser
+./bin/linglang-parser bootstrap/parser/expressions.lang
+```
+
+the parser is written in Linglang and shares the lexer through two relative file
+symlinks in `bootstrap/parser`. keep those links when copying the source directories.
+the packed executable needs only Erlang/OTP. the recipes can stay at home.
+
+functions, structs, constants, expressions, calls, collection literals, assignments,
+loops, and switches become an immutable AST with source locations. operator
+precedence is checked against Go's parser. broken syntax gets a filename, line,
+and column; excessive nesting gets a diagnostic too. the parser has boundaries.
+comments remain available through the lexer; the syntax tree omits them.
+
+the resolver is written in Linglang too. it knows which variable you meant.
+finally somebody does.
+
+```sh
+./bin/linglang run bootstrap/resolver examples/counter.lang
+./bin/linglang test --gc-stress --gc-stats bootstrap/resolver
+./bin/linglang test --no-opt --gc-stress --gc-stats bootstrap/resolver
+./bin/linglang fmt --check bootstrap/resolver
+./bin/linglang pack -o bin/linglang-resolver bootstrap/resolver
+./bin/linglang-resolver bootstrap/resolver/*.lang
+```
+
+pass one or more source files from the same package. the resolver tracks
+package declarations, forward references, parameters, local scopes, shadowing,
+and short declarations. unknown names and duplicate declarations get source
+locations. its binding output is checked against the Go seed on both backends,
+including its own source. the packed resolver runs with Erlang/OTP and no Go.
+keep the relative lexer/parser symlinks when copying the bootstrap directories.
+
+the type checker is written in Linglang now. it can tell you that
+`1 + true` is stupid. personal growth.
+
+```sh
+./bin/linglang run bootstrap/checker examples/counter.lang
+./bin/linglang test --gc-stress --gc-stats bootstrap/checker
+./bin/linglang test --no-opt --gc-stress --gc-stats bootstrap/checker
+./bin/linglang fmt --check bootstrap/checker
+./bin/linglang pack -o bin/linglang-checker bootstrap/checker
+./bin/linglang-checker bootstrap/checker/*.lang
+```
+
+it checks primitive types, calls, assignments, returns, distinct struct types,
+pointers, fields, literal keys, lists, maps, and native OTP call signatures.
+forward declarations work across files. the packed checker checks its own
+source with just Erlang/OTP installed. no Go hiding under the table.
+
+this is an early type pass. constant values and overflow, complete control-flow
+checks, and OTP message safety still need the seed compiler. `types ok` means
+this pass succeeded; it does not promise the seed can compile the program.
+Erlang emission and the compiler-builds-itself proof are still ahead.
+the runtime and OTP stay underneath.
 
 ## why
 
 because why the fuck not?
 
 i wanted `i++` and OTP supervision in the same language.
-one thing led to another and now there is a bean with three lawyers.
+one thing led to another and now the compiler needs a compiler.
 
-the compiler is written in Go. the bean is written in bean.
+the seed compiler is written in Go. the bootstrap tools are written in Linglang.

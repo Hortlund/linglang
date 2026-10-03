@@ -1,0 +1,2 @@
+These files are independent programs. The LSP checks each open file separately.
+Subdirectories remain ordinary packages.

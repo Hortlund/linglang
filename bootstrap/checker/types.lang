@@ -1,0 +1,208 @@
+package main
+
+const (
+	tInvalid = iota
+	tInt
+	tBool
+	tString
+	tUntypedInt
+	tUntypedBool
+	tUntypedString
+	tNil
+	tVoid
+)
+
+type CheckedField struct {
+	name   string
+	typeID int
+}
+
+type CheckedType struct {
+	kind   string
+	name   string
+	elem   int
+	key    int
+	fields List[CheckedField]
+	params List[int]
+	result int
+}
+
+type CheckedBinding struct {
+	kind   string
+	typeID int
+}
+
+type TypeScope struct {
+	names  Map[string, CheckedBinding]
+	parent *TypeScope
+}
+
+type CheckedValue struct {
+	name        string
+	typeID      int
+	addressable bool
+	kind        string
+}
+
+type CheckResult struct {
+	ok     bool
+	reason string
+	at     Token
+}
+
+type PendingConstant struct {
+	name     string
+	value    SyntaxNode
+	declared SyntaxNode
+	at       Token
+}
+
+type Checker struct {
+	native        *TypeScope
+	global        *TypeScope
+	constants     Map[string, PendingConstant]
+	constantState Map[string, int]
+	constantDepth int
+	types         Map[int, CheckedType]
+	interned      Map[string, int]
+	next          int
+	reason        string
+	at            Token
+	depth         int
+}
+
+func checkFail(c *Checker, at Token, reason string) {
+	if c.reason == "" {
+		c.reason = reason
+		c.at = at
+	}
+}
+
+func checkedType(c *Checker, id int) CheckedType {
+	return get(c.types, id).value
+}
+
+func addType(c *Checker, value CheckedType) int {
+	c.next++
+	c.types = put(c.types, c.next, value)
+	return c.next
+}
+
+func compoundType(c *Checker, kind string, key int, elem int) int {
+	name := kind + ":" + formatInt(key) + ":" + formatInt(elem)
+	found := get(c.interned, name)
+	if found.ok {
+		return found.value
+	}
+	id := addType(c, CheckedType{kind: kind, key: key, elem: elem})
+	c.interned = put(c.interned, name, id)
+	return id
+}
+
+func typedName(scope *TypeScope, name string) Delivery[CheckedBinding] {
+	for scope != nil {
+		found := get(scope.names, name)
+		if found.ok {
+			return found
+		}
+		scope = scope.parent
+	}
+	return Delivery[CheckedBinding]{}
+}
+
+func bindType(scope *TypeScope, name string, kind string, id int) {
+	if name != "_" {
+		scope.names = put(scope.names, name, CheckedBinding{kind: kind, typeID: id})
+	}
+}
+
+func defaultType(id int) int {
+	switch id {
+	case tUntypedInt:
+		return tInt
+	case tUntypedBool:
+		return tBool
+	case tUntypedString:
+		return tString
+	}
+	return id
+}
+
+func assignable(c *Checker, from int, to int) bool {
+	if from == tInvalid || to == tInvalid {
+		return false
+	}
+	if from == to || (from >= tUntypedInt && from <= tUntypedString && defaultType(from) == to) {
+		return true
+	}
+	if from == tNil {
+		kind := checkedType(c, to).kind
+		return kind == "pointer" || kind == "list" || kind == "map" || kind == "handle"
+	}
+	return false
+}
+
+func requireType(c *Checker, node SyntaxNode, value CheckedValue, expected int) {
+	if value.kind != "value" || !assignable(c, value.typeID, expected) {
+		checkFail(c, node.at, "incompatible value type")
+	}
+}
+
+func typeSyntax(c *Checker, scope *TypeScope, node SyntaxNode) int {
+	if c.reason != "" {
+		return tInvalid
+	}
+	switch node.kind {
+	case "Ident":
+		binding := typedName(scope, node.text)
+		if binding.ok && binding.value.kind == "type" {
+			return binding.value.typeID
+		}
+	case "ParenExpr":
+		return typeSyntax(c, scope, childAt(node, 0))
+	case "StarExpr":
+		return compoundType(c, "pointer", 0, typeSyntax(c, scope, childAt(node, 0)))
+	case "IndexExpr", "IndexListExpr":
+		base := childAt(node, 0)
+		binding := typedName(scope, base.text)
+		if binding.ok && binding.value.kind == "generic" {
+			if (base.text == "List" || base.text == "Delivery") && len(node.children) == 2 {
+				kind := "list"
+				if base.text == "Delivery" {
+					kind = "delivery"
+				}
+				return compoundType(c, kind, 0, typeSyntax(c, scope, childAt(node, 1)))
+			}
+			if base.text == "Map" && len(node.children) == 3 {
+				key := typeSyntax(c, scope, childAt(node, 1))
+				if key != tInt && key != tString {
+					checkFail(c, base.at, "Map keys must be int or string")
+				}
+				return compoundType(c, "map", key, typeSyntax(c, scope, childAt(node, 2)))
+			}
+		}
+	}
+	checkFail(c, node.at, "expected a supported type")
+	return tInvalid
+}
+
+func fieldType(c *Checker, id int, name string) int {
+	t := checkedType(c, id)
+	if t.kind == "pointer" {
+		t = checkedType(c, t.elem)
+	}
+	if t.kind == "delivery" {
+		if name == "value" {
+			return t.elem
+		}
+		if name == "ok" {
+			return tBool
+		}
+	}
+	for _, field := range t.fields {
+		if field.name == name {
+			return field.typeID
+		}
+	}
+	return tInvalid
+}

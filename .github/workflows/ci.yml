@@ -1,0 +1,80 @@
+name: beans remain beans
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / OTP ${{ matrix.otp }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+        otp: ['27', '28', '29']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.x'
+          cache: false
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+      - name: Check Go formatting
+        run: test -z "$(gofmt -l cmd internal)"
+      - name: Vet
+        run: go vet ./...
+      - name: Compiler, runtime, CLI, packaging, and release tests
+        run: go test ./... -count=1 -timeout=10m
+      - name: Build the CLI
+        run: go build -o _build/linglang ./cmd/linglang
+      - name: Check example formatting
+        run: ./_build/linglang fmt --check examples/bean_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker
+      - name: Test beans and the bootstrap frontend on both backends with GC stress
+        run: |
+          ./_build/linglang test --gc-stress --gc-stats examples/bean_tests
+          ./_build/linglang test --no-opt --gc-stress --gc-stats examples/bean_tests
+          ./_build/linglang test --gc-stress --gc-stats bootstrap/lexer
+          ./_build/linglang test --no-opt --gc-stress --gc-stats bootstrap/lexer
+          ./_build/linglang test --gc-stress --gc-stats bootstrap/parser
+          ./_build/linglang test --no-opt --gc-stress --gc-stats bootstrap/parser
+          ./_build/linglang test --gc-stress --gc-stats bootstrap/resolver
+          ./_build/linglang test --no-opt --gc-stress --gc-stats bootstrap/resolver
+          ./_build/linglang test --gc-stress --gc-stats bootstrap/checker
+          ./_build/linglang test --no-opt --gc-stress --gc-stats bootstrap/checker
+      - name: Fuzz the compiler
+        if: matrix.os == 'ubuntu-24.04' && matrix.otp == '29'
+        run: go test ./internal/compiler -run='^$' -fuzz='^FuzzCompile$' -fuzztime=10s -parallel=2
+
+  editor:
+    name: VS Code grammar and Linux package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.x'
+          cache: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm test
+      - run: npm run package -- linux-x64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linglang-vscode-linux-x64
+          path: dist/linglang-vscode-linux-x64.vsix
+          if-no-files-found: error

@@ -10,6 +10,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -44,47 +45,119 @@ type compiler struct {
 // Options retains the original cell-based lowering for comparisons and debugging.
 type Options struct{ DisableOptimizations bool }
 
+// SourceFile keeps each input's filename for parser and compiler diagnostics.
+type SourceFile struct {
+	Filename string
+	Source   []byte
+}
+
 // Compile returns an Erlang module. Unsupported syntax is an error, never ignored.
 func Compile(filename string, source []byte) (string, error) {
 	return CompileWithOptions(filename, source, Options{})
 }
 
 func CompileWithOptions(filename string, source []byte, options Options) (string, error) {
+	return CompileFilesWithOptions([]SourceFile{{Filename: filename, Source: source}}, options)
+}
+
+// CompileFiles compiles one package from multiple source files into one BEAM module.
+func CompileFiles(sources []SourceFile) (string, error) {
+	return CompileFilesWithOptions(sources, Options{})
+}
+
+func CompileFilesWithOptions(sources []SourceFile, options Options) (string, error) {
+	return compileFiles(sources, options, nil)
+}
+
+// TestCase describes a zero-argument test in a _test.lang file.
+type TestCase struct {
+	Name     string
+	Filename string
+	Line     int
+}
+
+// CompileTestFilesWithOptions accepts packages without main and exports a test
+// dispatcher. Discovery and lowering share the same parsed, checked package.
+func CompileTestFilesWithOptions(sources []SourceFile, options Options) (string, []TestCase, error) {
+	var tests []TestCase
+	program, err := compileFiles(sources, options, &tests)
+	return program, tests, err
+}
+
+func compileFiles(sources []SourceFile, options Options, tests *[]TestCase) (string, error) {
+	if len(sources) == 0 {
+		return "", fmt.Errorf("no source files provided")
+	}
+	// Sort a copy: callers may supply files in any order, and keep their inputs.
+	sources = append([]SourceFile(nil), sources...)
+	sort.Slice(sources, func(i, j int) bool { return sources[i].Filename < sources[j].Filename })
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filename, source, 0)
-	if err != nil {
-		return "", err
+	c := newCompiler(fset)
+	var files []*ast.File
+	for i, source := range sources {
+		if i > 0 && source.Filename == sources[i-1].Filename {
+			return "", fmt.Errorf("duplicate source file %q", source.Filename)
+		}
+		file, err := parser.ParseFile(fset, source.Filename, source.Source, 0)
+		if err != nil {
+			return "", err
+		}
+		if file.Name.Name != "main" {
+			return "", c.errorf(file.Name, "only package main is supported")
+		}
+		if len(file.Imports) != 0 {
+			return "", c.errorf(file.Imports[0], "imports are not supported yet")
+		}
+		files = append(files, file)
 	}
-	c := &compiler{fset: fset, cells: map[types.Object]string{}, info: &types.Info{
-		Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{},
-		Uses: map[*ast.Ident]types.Object{},
-	}}
-	if file.Name.Name != "main" {
-		return "", c.errorf(file.Name, "only package main is supported")
-	}
-	if len(file.Imports) != 0 {
-		return "", c.errorf(file.Imports[0], "imports are not supported yet")
-	}
-	config := types.Config{GoVersion: "go1.23", Sizes: types.SizesFor("gc", "amd64")}
+	config := typeConfig()
 	prelude, err := c.prelude()
 	if err != nil {
 		return "", err
 	}
-	pkg, err := config.Check("main", fset, []*ast.File{prelude, file}, c.info)
+	pkg, err := config.Check("main", fset, append([]*ast.File{prelude}, files...), c.info)
 	if err != nil {
 		return "", err
 	}
 	c.registerIntrinsics(prelude)
+	// Lower the complete package through the existing IR. The original nodes
+	// retain their positions and go/types identities across file boundaries.
+	file := &ast.File{Package: files[0].Package, Name: files[0].Name}
+	for _, input := range files {
+		file.Decls = append(file.Decls, input.Decls...)
+	}
 	if err := c.validateProcessSyntax(file); err != nil {
 		return "", err
 	}
 	main, ok := pkg.Scope().Lookup("main").(*types.Func)
-	if !ok {
+	if !ok && tests == nil {
 		return "", c.errorf(file, "a func main() entry point is required")
 	}
-	sig := main.Type().(*types.Signature)
-	if sig.Params().Len() != 0 || sig.Results().Len() != 0 {
-		return "", c.errorf(file, "main must have no parameters or results")
+	if ok {
+		sig := main.Type().(*types.Signature)
+		if sig.Params().Len() != 0 || sig.Results().Len() != 0 {
+			return "", fmt.Errorf("%s: main must have no parameters or results", c.fset.Position(main.Pos()))
+		}
+	}
+	if tests != nil {
+		for i, input := range files {
+			if !strings.HasSuffix(sources[i].Filename, "_test.lang") {
+				continue
+			}
+			for _, decl := range input.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || !strings.HasPrefix(fn.Name.Name, "Test") {
+					continue
+				}
+				sig := c.info.Defs[fn.Name].Type().(*types.Signature)
+				if fn.Recv != nil || fn.Type.TypeParams != nil || sig.Params().Len() != 0 || sig.Results().Len() != 0 {
+					return "", c.errorf(fn, "test functions must have no receiver, type parameters, parameters, or results")
+				}
+				position := c.fset.Position(fn.Name.Pos())
+				*tests = append(*tests, TestCase{Name: fn.Name.Name, Filename: position.Filename, Line: position.Line})
+			}
+		}
+		sort.Slice(*tests, func(i, j int) bool { return (*tests)[i].Name < (*tests)[j].Name })
 	}
 	// Check every variable and constant, including unused declarations and fields.
 	var validationErr error
@@ -162,7 +235,21 @@ func CompileWithOptions(filename string, source []byte, options Options) (string
 			return "", c.errorf(decl, "unsupported declaration")
 		}
 	}
-	return "%% Generated by linglang.\n-module(linglang_program).\n-export([main/0]).\n\nmain() -> try " + functionName("main") + "() after linglang_rt:finish_process() end.\n\n" + strings.Join(functions, "\n\n") + "\n", nil
+	var exports, wrappers []string
+	if main != nil {
+		exports = append(exports, "main/0")
+		wrappers = append(wrappers, "main() -> try "+functionName("main")+"() after linglang_rt:finish_process() end.")
+	}
+	if tests != nil {
+		exports = append(exports, "run_test/1")
+		var clauses []string
+		for _, test := range *tests {
+			clauses = append(clauses, "run_test("+binaryString(test.Name)+") -> try "+functionName(test.Name)+"() after linglang_rt:finish_process() end")
+		}
+		clauses = append(clauses, "run_test(_) -> erlang:error(linglang_unknown_test)")
+		wrappers = append(wrappers, strings.Join(clauses, ";\n")+".")
+	}
+	return "%% Generated by linglang.\n-module(linglang_program).\n-export([" + strings.Join(exports, ", ") + "]).\n\n" + strings.Join(wrappers, "\n\n") + "\n\n" + strings.Join(functions, "\n\n") + "\n", nil
 }
 
 func (c *compiler) supportedType(t types.Type, seen map[types.Type]bool) bool {

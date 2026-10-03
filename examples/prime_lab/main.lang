@@ -1,0 +1,62 @@
+package main
+
+// Run from the repository root:
+// go run ./cmd/linglang run examples/prime_lab/ examples/prime_jobs.txt prime-results.csv
+
+func main() {
+    inputPath := "examples/prime_jobs.txt"
+    outputPath := "prime-results.csv"
+    options := args()
+    if len(options) > 2 { panic("usage: prime_lab.lang [input-file] [output-file]") }
+    if head(options).ok { inputPath = head(options).value; options = tail(options) }
+    if head(options).ok { outputPath = head(options).value }
+    input := readFile(inputPath)
+    if !input.ok { panic("cannot read " + inputPath + ": " + input.reason) }
+
+    var jobs List[Job]
+    skipped := 0
+    for lineNumber, raw := range split(input.value, "\n") {
+        // Blank lines and # comments are welcome. Bad jobs do not kill the batch.
+        line := trim(head(split(raw, "#")).value)
+        if line == "" { continue }
+        parsed := parseInt(line)
+        if !parsed.ok || parsed.value < 2 || parsed.value > 100000 {
+            // Report the location without sending arbitrary file bytes to Unicode output.
+            println("Skipping line", lineNumber + 1, "(expected an integer from 2 to 100000)")
+            skipped++
+            continue
+        }
+        jobs = append(jobs, Job{id: len(jobs) + 1, limit: parsed.value})
+    }
+
+    println("BEAM prime lab")
+    println("Loaded jobs:", len(jobs), "| Skipped:", skipped)
+    service := spawnMonitor(queue, QueueArgs{parent: self(), workers: WorkerCount, crash: true})
+    supervisor := startSupervisor(3, 5)
+    for slot := 1; slot <= WorkerCount; slot++ {
+        child := supervise(supervisor, "prime-worker-" + formatInt(slot), worker,
+            WorkerArgs{queue: service.pid, slot: slot}, ChildOptions{restart: "permanent"})
+        if !child.ok { panic(child.reason) }
+    }
+    if len(jobs) > 0 { println("Crashing the first worker on purpose; the queue will retry its job.") }
+    send(service.pid, Command{kind: Enqueue, jobs: jobs})
+    delivery := receive[Summary](30000)
+    if !delivery.ok { panic("prime lab response timed out") }
+    summary := delivery.value
+    exited := wait(service.monitor, 5000)
+    if !exited.ok || !exited.normal { panic("queue did not finish normally") }
+    stopped := stopSupervisor(supervisor)
+    if !stopped { panic("supervisor did not stop") }
+
+    report := "job,limit,prime_count,largest_prime\n"
+    for _, result := range summary.results {
+        println("Up to", result.limit, ":", result.count, "primes | Largest:", result.largest)
+        report += formatInt(result.id) + "," + formatInt(result.limit) + "," + formatInt(result.count) + "," + formatInt(result.largest) + "\n"
+    }
+    written := writeFile(outputPath, report)
+    if !written.ok { panic("cannot write " + outputPath + ": " + written.reason) }
+    println("Completed:", len(summary.results), "| Worker restarts:", summary.restarts)
+    println("Pool workers:", WorkerCount, "| Peak active:", summary.peak)
+    println("Supervisor stopped:", stopped)
+    println("Saved CSV:", outputPath)
+}

@@ -1,0 +1,146 @@
+package main
+
+// Children are immutable values, not managed pointers. Recursive lists keep
+// syntax trees cheap to share without creating mutable heap graphs.
+type SyntaxNode struct {
+	kind     string
+	text     string
+	at       Token
+	children List[SyntaxNode]
+}
+
+type ParseResult struct {
+	root     SyntaxNode
+	ok       bool
+	filename string
+	reason   string
+	offset   int
+	line     int
+	column   int
+}
+
+type Parser struct {
+	lexer   *Lexer
+	current Token
+	reason  string
+	errorAt Token
+	depth   int
+}
+
+func syntax(kind string, at Token, text string, children List[SyntaxNode]) SyntaxNode {
+	return SyntaxNode{kind: kind, at: at, text: text, children: children}
+}
+
+func noSyntax() SyntaxNode { return SyntaxNode{kind: "nil"} }
+
+func syntaxOrder(reversed List[SyntaxNode]) List[SyntaxNode] {
+	var result List[SyntaxNode]
+	for _, node := range reversed {
+		result = prepend(node, result)
+	}
+	return result
+}
+
+func childAt(node SyntaxNode, index int) SyntaxNode {
+	items := node.children
+	for i := 0; i < index; i++ {
+		items = tail(items)
+	}
+	return head(items).value
+}
+
+func parseFail(p *Parser, reason string) {
+	if p.reason == "" {
+		p.reason = reason
+		p.errorAt = p.current
+	}
+}
+
+func parseAdvance(p *Parser) {
+	if p.reason != "" {
+		return
+	}
+	for {
+		p.current = nextToken(p.lexer)
+		if p.lexer.reason != "" {
+			p.reason = p.lexer.reason
+			p.errorAt = Token{filename: p.lexer.filename, offset: p.lexer.errorOffset, line: p.lexer.errorLine, column: p.lexer.errorColumn}
+			return
+		}
+		if p.current.kind != "COMMENT" {
+			return
+		}
+	}
+}
+
+func accept(p *Parser, kind string) bool {
+	if p.reason == "" && p.current.kind == kind {
+		parseAdvance(p)
+		return true
+	}
+	return false
+}
+
+func expect(p *Parser, kind string) Token {
+	at := p.current
+	if !accept(p, kind) {
+		parseFail(p, "expected "+kind+", found "+p.current.kind)
+	}
+	return at
+}
+
+func parseEnter(p *Parser) bool {
+	if p.reason != "" {
+		return false
+	}
+	if p.depth >= 128 {
+		parseFail(p, "syntax nesting exceeds 128 levels")
+		return false
+	}
+	p.depth++
+	return true
+}
+
+func statementEnd(p *Parser) {
+	if p.current.kind != "}" {
+		expect(p, ";")
+	}
+}
+
+func parse(filename string, source string) ParseResult {
+	lexer := Lexer{filename: filename, source: source, line: 1, column: 1}
+	if startsWith(&lexer, "\ufeff") {
+		advance(&lexer)
+	}
+	p := Parser{lexer: &lexer}
+	parseAdvance(&p)
+	at := expect(&p, "package")
+	name := parseIdent(&p)
+	expect(&p, ";")
+	var reversed List[SyntaxNode]
+	for p.reason == "" && p.current.kind != "EOF" {
+		if accept(&p, ";") {
+			continue
+		}
+		var decl SyntaxNode
+		if p.current.kind == "func" {
+			decl = parseFunction(&p)
+		} else {
+			decl = parseDeclaration(&p, false)
+		}
+		reversed = prepend(decl, reversed)
+		if p.current.kind != "EOF" {
+			expect(&p, ";")
+		}
+	}
+	root := syntax("File", at, "", prepend(name, syntaxOrder(reversed)))
+	if p.reason != "" {
+		return ParseResult{filename: filename, reason: p.reason, offset: p.errorAt.offset, line: p.errorAt.line, column: p.errorAt.column}
+	}
+	return ParseResult{root: root, ok: true, filename: filename}
+}
+
+func parseIdent(p *Parser) SyntaxNode {
+	at := expect(p, "IDENT")
+	return syntax("Ident", at, at.text, nil)
+}

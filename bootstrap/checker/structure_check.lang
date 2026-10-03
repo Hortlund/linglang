@@ -1,0 +1,70 @@
+package main
+
+type TypeVisit struct {
+	typeID int
+	exit   bool
+}
+
+func validateStruct(c *Checker, id int, at Token) {
+	pending := List[TypeVisit]{TypeVisit{typeID: id}}
+	var states Map[int, int]
+	for head(pending).ok && c.reason == "" {
+		visit := head(pending).value
+		pending = tail(pending)
+		t := checkedType(c, visit.typeID)
+		if visit.exit {
+			states = put(states, visit.typeID, 2)
+		} else if t.kind == "struct" || t.kind == "delivery" {
+			state := get(states, visit.typeID).value
+			if state == 1 {
+				checkFail(c, at, "recursive struct requires indirection")
+			} else if state == 0 {
+				states = put(states, visit.typeID, 1)
+				pending = prepend(TypeVisit{typeID: visit.typeID, exit: true}, pending)
+				for _, field := range t.fields {
+					pending = prepend(TypeVisit{typeID: field.typeID}, pending)
+				}
+				if t.kind == "delivery" {
+					pending = prepend(TypeVisit{typeID: t.elem}, pending)
+				}
+			}
+		}
+	}
+}
+
+func comparableType(c *Checker, id int) bool {
+	pending := List[int]{id}
+	var seen Map[int, bool]
+	for head(pending).ok {
+		current := head(pending).value
+		pending = tail(pending)
+		if get(seen, current).ok {
+			continue
+		}
+		seen = put(seen, current, true)
+		t := checkedType(c, current)
+		if t.kind == "list" || t.kind == "map" || t.kind == "func" {
+			return false
+		}
+		if t.kind == "struct" {
+			for _, field := range t.fields {
+				pending = prepend(field.typeID, pending)
+			}
+		}
+		if t.kind == "delivery" {
+			pending = prepend(t.elem, pending)
+		}
+	}
+	return true
+}
+
+func validateDeclarations(c *Checker, scope *TypeScope, declarations List[SyntaxNode]) {
+	for _, declaration := range declarations {
+		if declaration.kind == "GenDecl" && declaration.text == "type" {
+			for _, spec := range declaration.children {
+				name := childAt(spec, 0)
+				validateStruct(c, typedName(scope, name.text).value.typeID, name.at)
+			}
+		}
+	}
+}

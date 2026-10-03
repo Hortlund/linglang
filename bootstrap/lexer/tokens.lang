@@ -1,0 +1,407 @@
+package main
+
+// Token text is the original source bytes. Implicit semicolons use "\n".
+// Offsets are zero-based bytes; lines and columns are one-based byte positions.
+type Token struct {
+	filename string
+	kind     string
+	text     string
+	offset   int
+	line     int
+	column   int
+	implicit bool
+}
+
+type LexResult struct {
+	tokens   List[Token]
+	ok       bool
+	filename string
+	reason   string
+	offset   int
+	line     int
+	column   int
+}
+
+type Lexer struct {
+	filename    string
+	source      string
+	offset      int
+	line        int
+	column      int
+	insertSemi  bool
+	pendingSemi bool
+	semiOffset  int
+	semiLine    int
+	semiColumn  int
+	reason      string
+	errorOffset int
+	errorLine   int
+	errorColumn int
+}
+
+func sourceToken(s *Lexer, kind string, start int, line int, column int) Token {
+	return Token{filename: s.filename, kind: kind, text: slice(s.source, start, s.offset), offset: start, line: line, column: column}
+}
+
+func implicitSemi(s *Lexer, offset int, line int, column int) Token {
+	s.insertSemi = false
+	return Token{filename: s.filename, kind: ";", text: "\n", offset: offset, line: line, column: column, implicit: true}
+}
+
+func failAt(s *Lexer, reason string, offset int, line int, column int) {
+	if s.reason == "" {
+		s.reason = reason
+		s.errorOffset = offset
+		s.errorLine = line
+		s.errorColumn = column
+	}
+}
+
+func failHere(s *Lexer, reason string) {
+	failAt(s, reason, s.offset, s.line, s.column)
+}
+
+func currentByte(s *Lexer) int {
+	if s.offset == len(s.source) {
+		return -1
+	}
+	return byteAt(s.source, s.offset)
+}
+
+func startsWith(s *Lexer, text string) bool {
+	end := s.offset + len(text)
+	return end <= len(s.source) && slice(s.source, s.offset, end) == text
+}
+
+// Consume a Unicode scalar, preserving byte-based columns. Invalid source
+// bytes fail even inside a comment or quoted literal.
+func advance(s *Lexer) {
+	if s.offset == len(s.source) {
+		return
+	}
+	r := runeAt(s.source, s.offset)
+	if !r.ok {
+		failHere(s, "invalid UTF-8 encoding")
+	}
+	if r.value == 0 {
+		failHere(s, "NUL byte in source")
+	}
+	if r.value == 65279 && s.offset != 0 {
+		failHere(s, "byte order mark must appear at the start")
+	}
+	s.offset += r.width
+	if r.value == '\n' {
+		s.line++
+		s.column = 1
+	} else {
+		s.column += r.width
+	}
+}
+
+func keyword(text string) string {
+	switch text {
+	case "break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough", "for", "func", "go", "goto", "if", "import", "interface", "map", "package", "range", "return", "select", "struct", "switch", "type", "var":
+		return text
+	}
+	return "IDENT"
+}
+
+func endsStatement(kind string) bool {
+	switch kind {
+	case "IDENT", "INT", "STRING", "CHAR", "break", "continue", "fallthrough", "return", "++", "--", ")", "]", "}":
+		return true
+	}
+	return false
+}
+
+func identifier(s *Lexer) {
+	for s.offset < len(s.source) && s.reason == "" {
+		r := runeAt(s.source, s.offset)
+		if !r.ok {
+			failHere(s, "invalid UTF-8 encoding")
+			return
+		}
+		if r.value != '_' && !isLetter(r.value) && !isDigit(r.value) {
+			return
+		}
+		advance(s)
+	}
+}
+
+func digitValue(c int) int {
+	if c >= '0' && c <= '9' {
+		return c - '0'
+	}
+	if c >= 'a' && c <= 'f' {
+		return c - 'a' + 10
+	}
+	if c >= 'A' && c <= 'F' {
+		return c - 'A' + 10
+	}
+	return -1
+}
+
+func integerLiteral(s *Lexer) {
+	base := 10
+	prefix := false
+	digits := 0
+	underscore := false
+	if startsWith(s, "0x") || startsWith(s, "0X") {
+		base = 16
+		prefix = true
+	}
+	if startsWith(s, "0b") || startsWith(s, "0B") {
+		base = 2
+		prefix = true
+	}
+	if startsWith(s, "0o") || startsWith(s, "0O") {
+		base = 8
+		prefix = true
+	}
+	if prefix {
+		advance(s)
+		advance(s)
+	} else {
+		if currentByte(s) == '0' {
+			base = 8
+		}
+	}
+	for s.reason == "" {
+		c := currentByte(s)
+		if c == '_' {
+			if underscore || (digits == 0 && !prefix) {
+				failHere(s, "invalid underscore in integer literal")
+				return
+			}
+			underscore = true
+			advance(s)
+			continue
+		}
+		value := digitValue(c)
+		if value < 0 || (base != 16 && value >= 10) {
+			break
+		}
+		if value >= base {
+			failHere(s, "invalid digit in integer literal")
+			return
+		}
+		digits++
+		underscore = false
+		advance(s)
+	}
+	if digits == 0 {
+		failHere(s, "integer literal has no digits")
+		return
+	}
+	if underscore {
+		failHere(s, "integer literal ends with underscore")
+		return
+	}
+	c := currentByte(s)
+	if c == '.' || c == 'p' || c == 'P' || (base != 16 && (c == 'e' || c == 'E')) {
+		failHere(s, "floating-point literals are not supported")
+	}
+}
+
+// Validate escapes without decoding them; constant evaluation belongs to the
+// future parser/type checker. A byte escape can represent arbitrary string bytes.
+func escape(s *Lexer, quote int) {
+	advance(s)
+	c := currentByte(s)
+	if c == quote || c == '\\' || c == 'a' || c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't' || c == 'v' {
+		advance(s)
+		return
+	}
+	base := 16
+	count := 0
+	limit := 255
+	if c >= '0' && c <= '7' {
+		base = 8
+		count = 3
+	} else {
+		switch c {
+		case 'x':
+			count = 2
+		case 'u':
+			count = 4
+			limit = 1114111
+		case 'U':
+			count = 8
+			limit = 1114111
+		default:
+			failHere(s, "invalid escape sequence")
+			return
+		}
+		advance(s)
+	}
+	value := 0
+	for i := 0; i < count; i++ {
+		digit := digitValue(currentByte(s))
+		if digit < 0 || digit >= base {
+			failHere(s, "invalid escape digit")
+			return
+		}
+		value = value*base + digit
+		advance(s)
+	}
+	if value > limit || (limit != 255 && value >= 55296 && value <= 57343) {
+		failHere(s, "escape value out of range")
+	}
+}
+
+func quoted(s *Lexer, quote int, start int, line int, column int) {
+	advance(s)
+	characters := 0
+	for s.reason == "" && s.offset < len(s.source) {
+		c := currentByte(s)
+		if c == quote {
+			advance(s)
+			if quote == '\'' && characters != 1 {
+				failAt(s, "rune literal must contain one character", start, line, column)
+			}
+			return
+		}
+		if quote != '`' && c == '\n' {
+			break
+		}
+		if quote != '`' && c == '\\' {
+			escape(s, quote)
+		} else {
+			advance(s)
+		}
+		characters++
+	}
+	failAt(s, "unterminated quoted literal", start, line, column)
+}
+
+func comment(s *Lexer, start int, line int, column int) {
+	block := startsWith(s, "/*")
+	advance(s)
+	advance(s)
+	for s.reason == "" && s.offset < len(s.source) {
+		if block && startsWith(s, "*/") {
+			advance(s)
+			advance(s)
+			return
+		}
+		if currentByte(s) == '\n' {
+			if !block {
+				return
+			}
+			if s.insertSemi && !s.pendingSemi {
+				s.pendingSemi = true
+				s.semiOffset = s.offset
+				s.semiLine = s.line
+				s.semiColumn = s.column
+			}
+		}
+		advance(s)
+	}
+	if block {
+		failAt(s, "unterminated block comment", start, line, column)
+	}
+}
+
+func operator(s *Lexer) string {
+	// Longest first: a shorter prefix must not eat an assignment or ellipsis.
+	for _, op := range (List[string]{"<<=", ">>=", "&^=", "...", "++", "--", "==", "!=", "<=", ">=", ":=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "&&", "||", "<<", ">>", "&^", "<-", "+", "-", "*", "/", "%", "&", "|", "^", "!", "=", "<", ">", "(", ")", "[", "]", "{", "}", ",", ".", ";", ":", "~"}) {
+		if startsWith(s, op) {
+			for i := 0; i < len(op); i++ {
+				advance(s)
+			}
+			return op
+		}
+	}
+	failHere(s, "unexpected character")
+	return "INVALID"
+}
+
+func nextToken(s *Lexer) Token {
+	if s.pendingSemi {
+		s.pendingSemi = false
+		return implicitSemi(s, s.semiOffset, s.semiLine, s.semiColumn)
+	}
+	for s.offset < len(s.source) && s.reason == "" {
+		c := currentByte(s)
+		if c != ' ' && c != '\t' && c != '\r' && c != '\n' {
+			break
+		}
+		offset := s.offset
+		line := s.line
+		column := s.column
+		advance(s)
+		if c == '\n' && s.insertSemi {
+			return implicitSemi(s, offset, line, column)
+		}
+	}
+	start := s.offset
+	line := s.line
+	column := s.column
+	if start == len(s.source) {
+		if s.insertSemi {
+			return implicitSemi(s, start, line, column)
+		}
+		return sourceToken(s, "EOF", start, line, column)
+	}
+	c := currentByte(s)
+	kind := ""
+	r := runeAt(s.source, start)
+	if !r.ok {
+		failHere(s, "invalid UTF-8 encoding")
+	} else {
+		if c == '_' || isLetter(r.value) {
+			identifier(s)
+			kind = keyword(slice(s.source, start, s.offset))
+		} else {
+			if c >= '0' && c <= '9' {
+				integerLiteral(s)
+				kind = "INT"
+			} else {
+				if c == '"' || c == '\'' || c == '`' {
+					quoted(s, c, start, line, column)
+					kind = "STRING"
+					if c == '\'' {
+						kind = "CHAR"
+					}
+				} else {
+					if startsWith(s, "//") || startsWith(s, "/*") {
+						comment(s, start, line, column)
+						return sourceToken(s, "COMMENT", start, line, column)
+					}
+					if c == '.' && start+1 < len(s.source) && byteAt(s.source, start+1) >= '0' && byteAt(s.source, start+1) <= '9' {
+						failHere(s, "floating-point literals are not supported")
+					}
+					kind = operator(s)
+				}
+			}
+		}
+	}
+	s.insertSemi = endsStatement(kind)
+	return sourceToken(s, kind, start, line, column)
+}
+
+func tokenOrder(reversed List[Token]) List[Token] {
+	var result List[Token]
+	for _, item := range reversed {
+		result = prepend(item, result)
+	}
+	return result
+}
+
+func lex(filename string, source string) LexResult {
+	s := Lexer{filename: filename, source: source, line: 1, column: 1}
+	if startsWith(&s, "\ufeff") {
+		advance(&s)
+	}
+	var reversed List[Token]
+	for {
+		item := nextToken(&s)
+		if s.reason != "" {
+			return LexResult{tokens: tokenOrder(reversed), filename: filename, reason: s.reason, offset: s.errorOffset, line: s.errorLine, column: s.errorColumn}
+		}
+		reversed = prepend(item, reversed)
+		if item.kind == "EOF" {
+			return LexResult{tokens: tokenOrder(reversed), ok: true, filename: filename}
+		}
+	}
+}

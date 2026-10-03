@@ -42,8 +42,11 @@ func stopSupervisor(supervisor Supervisor) bool { return false }
 `
 
 func (c *compiler) prelude() (*ast.File, error) {
-	return parser.ParseFile(c.fset, "<linglang-prelude>", processPrelude+standardPrelude+mapPrelude, 0)
+	return parser.ParseFile(c.fset, "<linglang-prelude>", PreludeSource(), 0)
 }
+
+// PreludeSource is the shared declaration contract for compiler and tooling.
+func PreludeSource() string { return processPrelude + standardPrelude + mapPrelude }
 
 func (c *compiler) registerIntrinsics(file *ast.File) {
 	c.intrinsics = map[types.Object]string{}

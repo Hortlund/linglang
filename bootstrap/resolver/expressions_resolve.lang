@@ -1,0 +1,73 @@
+package main
+
+// An explicit work list keeps long left-associated operator trees off the
+// resolver's call stack, just as the parser and dump handle long expressions.
+func resolveExpression(r *Resolver, scope *Scope, expression SyntaxNode) {
+	pending := List[SyntaxNode]{expression}
+	for r.reason == "" && head(pending).ok {
+		node := head(pending).value
+		pending = tail(pending)
+		switch node.kind {
+		case "nil", "INT", "STRING", "CHAR":
+			continue
+		case "Ident":
+			useName(r, scope, node)
+			continue
+		case "SelectorExpr":
+			r.deferred = prepend(childAt(node, 1).at, r.deferred)
+			pending = prepend(childAt(node, 0), pending)
+			continue
+		case "KeyValueExpr":
+			pending = prepend(childAt(node, 1), pending)
+			key := childAt(node, 0)
+			if key.kind == "Ident" {
+				// A struct field key and a map key have the same syntax. The
+				// type checker will decide whether this is a lexical reference.
+				r.deferred = prepend(key.at, r.deferred)
+			} else {
+				pending = prepend(key, pending)
+			}
+			continue
+		case "StructType":
+			resolveFields(r, scope, childAt(node, 0))
+			continue
+		}
+		for _, child := range syntaxOrder(node.children) {
+			pending = prepend(child, pending)
+		}
+	}
+}
+
+func resolveAssignment(r *Resolver, scope *Scope, statement SyntaxNode) {
+	for _, value := range childAt(statement, 1).children {
+		resolveExpression(r, scope, value)
+	}
+	var seen Map[string, bool]
+	newNames := 0
+	for _, name := range childAt(statement, 0).children {
+		if name.kind == "Ident" && name.text == "_" {
+			continue
+		}
+		if statement.text != ":=" {
+			resolveExpression(r, scope, name)
+			continue
+		}
+		if name.kind != "Ident" {
+			resolveFail(r, name.at, "short declarations require identifier names")
+			continue
+		}
+		if get(seen, name.text).ok {
+			resolveFail(r, name.at, "duplicate short declaration name "+name.text)
+		}
+		seen = put(seen, name.text, true)
+		if get(scope.names, name.text).ok {
+			useName(r, scope, name)
+		} else {
+			defineSymbol(r, scope, name, "var")
+			newNames++
+		}
+	}
+	if statement.text == ":=" && newNames == 0 {
+		resolveFail(r, statement.at, "short declaration needs a new name")
+	}
+}

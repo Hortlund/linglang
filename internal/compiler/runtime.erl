@@ -6,7 +6,8 @@
          list_tail/1, list_first/1, list_more/1,
          map_length/1, map_get/3, map_put/3, map_remove/2,
          read_file/1, write_file/2, text_split/2, text_trim/1,
-         parse_int/1, format_int/1, arguments/0,
+         parse_int/1, format_int/1, arguments/0, set_arguments/1, assert_value/3,
+         text_byte/2, text_slice/3, text_join/2, text_rune/2, unicode_letter/1, unicode_digit/1,
          scope/1, keep/1, roots/1, safepoint/0, collect/0, stats/0, set_gc_stress/1,
          spawn_process/4, send_message/3, receive_message/3,
          monitor_process/1, wait_process/2, demonitor_process/1,
@@ -290,6 +291,49 @@ write_file(Path, Text) ->
 text_split(_, <<>>) -> erlang:error(linglang_empty_separator);
 text_split(Text, Separator) -> binary:split(Text, Separator, [global]).
 
+text_byte(Text, Index) when Index >= 0, Index < byte_size(Text) -> binary:at(Text, Index);
+text_byte(_, _) -> erlang:error(linglang_byte_index_out_of_range).
+
+%% End-exclusive byte ranges; slicing need not land on UTF-8 boundaries.
+text_slice(Text, Start, End) when Start >= 0, End >= Start, End =< byte_size(Text) ->
+    binary:part(Text, Start, End - Start);
+text_slice(_, _, _) -> erlang:error(linglang_string_slice_out_of_range).
+
+text_join(Parts, Separator) -> iolist_to_binary(lists:join(Separator, list_items(Parts))).
+
+%% Decode exactly one Unicode scalar. EOF has width 0; malformed UTF-8 consumes
+%% one byte with U+FFFD and ok=false, distinct from a valid encoded U+FFFD.
+text_rune(Text, Offset) when Offset >= 0, Offset =< byte_size(Text) ->
+    case binary:part(Text, Offset, byte_size(Text) - Offset) of
+        <<>> -> rune_result(0, 0, false);
+        <<Value/utf8, Rest/binary>> -> rune_result(Value, byte_size(Text) - Offset - byte_size(Rest), true);
+        _ -> rune_result(16#FFFD, 1, false)
+    end;
+text_rune(_, _) -> erlang:error(linglang_byte_index_out_of_range).
+
+rune_result(Value, Width, OK) ->
+    #{field_76616c7565 => Value, field_7769647468 => Width, field_6f6b => OK}.
+
+unicode_letter(Value) when Value >= $A, Value =< $Z; Value >= $a, Value =< $z -> true;
+unicode_letter(Value) when Value < 128 -> false;
+unicode_letter(Value) -> unicode_category(Value, letter, <<"^\\p{L}$">>).
+
+unicode_digit(Value) when Value >= $0, Value =< $9 -> true;
+unicode_digit(Value) when Value < 128 -> false;
+unicode_digit(Value) -> unicode_category(Value, digit, <<"^\\p{Nd}$">>).
+
+unicode_category(Value, Category, Pattern) when Value >= 0, Value =< 16#10FFFF,
+                                              not (Value >= 16#D800 andalso Value =< 16#DFFF) ->
+    Key = {?MODULE, unicode_category, Category},
+    Compiled = case persistent_term:get(Key, undefined) of
+        undefined ->
+            {ok, RE} = re:compile(Pattern, [unicode]),
+            persistent_term:put(Key, RE), RE;
+        RE -> RE
+    end,
+    re:run(<<Value/utf8>>, Compiled, [{capture, none}]) =:= match;
+unicode_category(_, _, _) -> false.
+
 %% ASCII whitespace is deliberate: arbitrary file bytes need not be valid UTF-8.
 text_trim(Text) ->
     trim_end(trim_start(Text)).
@@ -328,7 +372,19 @@ decimal_digits(_, _, _) -> {error, <<"invalid integer">>}.
 
 format_int(Value) -> integer_to_binary(Value).
 
-arguments() -> [unicode:characters_to_binary(Arg) || Arg <- init:get_plain_arguments()].
+assert_value(true, _, _) -> ok;
+assert_value(false, Filename, Line) -> erlang:error({linglang_assertion, Filename, Line}).
+
+%% Escript's plain arguments include its filename. Its launcher supplies only
+%% program arguments once, shared by main and every spawned/restarted worker.
+set_arguments(Args) ->
+    persistent_term:put({?MODULE, arguments}, [unicode:characters_to_binary(Arg) || Arg <- Args]).
+
+arguments() ->
+    case persistent_term:get({?MODULE, arguments}, undefined) of
+        undefined -> [unicode:characters_to_binary(Arg) || Arg <- init:get_plain_arguments()];
+        Args -> Args
+    end.
 
 value_result(Value, OK, Reason) ->
     #{field_76616c7565 => Value, field_6f6b => OK, field_726561736f6e => Reason}.

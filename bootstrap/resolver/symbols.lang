@@ -1,0 +1,126 @@
+package main
+
+type Symbol struct {
+	name string
+	kind string
+	at   Token
+}
+
+type Reference struct {
+	at     Token
+	symbol Symbol
+}
+
+type ResolveResult struct {
+	ok          bool
+	definitions List[Symbol]
+	references  List[Reference]
+	deferred    List[Token]
+	reason      string
+	at          Token
+}
+
+type Scope struct {
+	names  Map[string, Symbol]
+	parent *Scope
+}
+
+type Resolver struct {
+	definitions List[Symbol]
+	references  List[Reference]
+	deferred    List[Token]
+	reason      string
+	at          Token
+}
+
+func resolveFail(r *Resolver, at Token, reason string) {
+	if r.reason == "" {
+		r.reason = reason
+		r.at = at
+	}
+}
+
+func findSymbol(scope *Scope, name string) Delivery[Symbol] {
+	for scope != nil {
+		found := get(scope.names, name)
+		if found.ok {
+			return found
+		}
+		scope = scope.parent
+	}
+	return Delivery[Symbol]{}
+}
+
+func defineSymbol(r *Resolver, scope *Scope, name SyntaxNode, kind string) {
+	if r.reason != "" || name.text == "_" {
+		return
+	}
+	if get(scope.names, name.text).ok {
+		resolveFail(r, name.at, "duplicate declaration of "+name.text)
+		return
+	}
+	symbol := Symbol{name: name.text, kind: kind, at: name.at}
+	scope.names = put(scope.names, name.text, symbol)
+	r.definitions = prepend(symbol, r.definitions)
+}
+
+func useName(r *Resolver, scope *Scope, name SyntaxNode) {
+	if r.reason != "" {
+		return
+	}
+	found := findSymbol(scope, name.text)
+	if !found.ok {
+		resolveFail(r, name.at, "undefined name "+name.text)
+		return
+	}
+	r.references = prepend(Reference{at: name.at, symbol: found.value}, r.references)
+}
+
+func builtinScope() Scope {
+	var names Map[string, Symbol]
+	for _, name := range (List[string]{"int", "bool", "string", "Pid", "Monitor", "Supervisor", "Process", "ChildOptions", "Child", "Delivery", "Exit", "List", "Map", "TextResult", "IntResult", "IOResult", "RuneResult", "prepend", "head", "tail", "self", "spawn", "spawnMonitor", "send", "receive", "monitor", "wait", "demonitor", "startSupervisor", "supervisorPid", "supervise", "lookupChild", "restartChild", "stopChild", "removeChild", "stopSupervisor", "get", "put", "remove", "readFile", "writeFile", "split", "trim", "parseInt", "formatInt", "args", "assert", "byteAt", "slice", "join", "runeAt", "isLetter", "isDigit", "len", "append", "make", "new", "panic", "print", "println", "true", "false", "nil", "iota"}) {
+		names = put(names, name, Symbol{name: name, kind: "builtin"})
+	}
+	return Scope{names: names}
+}
+
+func orderedSymbols(reversed List[Symbol]) List[Symbol] {
+	var result List[Symbol]
+	for _, symbol := range reversed {
+		result = prepend(symbol, result)
+	}
+	return result
+}
+
+func orderedReferences(reversed List[Reference]) List[Reference] {
+	var result List[Reference]
+	for _, reference := range reversed {
+		result = prepend(reference, result)
+	}
+	return result
+}
+
+// Resolve lexical names in one package, collecting package declarations before
+// visiting bodies. Field selectors and identifier literal keys await types.
+func resolve(files List[SyntaxNode]) ResolveResult {
+	r := Resolver{}
+	native := builtinScope()
+	packageScope := Scope{parent: &native}
+	if !head(files).ok {
+		return ResolveResult{reason: "no source files", at: Token{filename: "<package>", line: 1, column: 1}}
+	}
+	for _, file := range files {
+		if file.kind != "File" || childAt(file, 0).text != "main" {
+			resolveFail(&r, file.at, "only package main is supported")
+		}
+		for _, declaration := range tail(file.children) {
+			predeclare(&r, &packageScope, declaration)
+		}
+	}
+	for _, file := range files {
+		for _, declaration := range tail(file.children) {
+			resolveDeclaration(&r, &packageScope, declaration, true)
+		}
+	}
+	return ResolveResult{ok: r.reason == "", reason: r.reason, at: r.at, definitions: orderedSymbols(r.definitions), references: orderedReferences(r.references), deferred: tokenOrder(r.deferred)}
+}

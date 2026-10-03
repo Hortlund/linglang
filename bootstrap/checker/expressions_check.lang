@@ -1,0 +1,326 @@
+package main
+
+func withoutParens(node SyntaxNode) SyntaxNode {
+	for node.kind == "ParenExpr" {
+		node = childAt(node, 0)
+	}
+	return node
+}
+
+func expressionValue(id int) CheckedValue {
+	return CheckedValue{typeID: id, kind: "value"}
+}
+
+func checkExpression(c *Checker, scope *TypeScope, node SyntaxNode, expected int) CheckedValue {
+	if c.reason != "" {
+		return CheckedValue{}
+	}
+	c.depth++
+	if c.depth > 128 {
+		checkFail(c, node.at, "type expression nesting limit exceeded")
+		c.depth--
+		return CheckedValue{}
+	}
+	value := checkExpressionInner(c, scope, node, expected)
+	c.depth--
+	return value
+}
+
+func checkExpressionInner(c *Checker, scope *TypeScope, node SyntaxNode, expected int) CheckedValue {
+	switch node.kind {
+	case "INT", "CHAR":
+		return expressionValue(tUntypedInt)
+	case "STRING":
+		return expressionValue(tUntypedString)
+	case "Ident":
+		binding := typedName(scope, node.text)
+		if !binding.ok {
+			checkFail(c, node.at, "undefined name "+node.text)
+			return CheckedValue{}
+		}
+		if binding.value.kind == "pending" {
+			checkConstant(c, node.text)
+			binding = typedName(scope, node.text)
+		}
+		b := binding.value
+		if c.constantDepth > 0 && (b.kind == "var" || b.kind == "param") {
+			checkFail(c, node.at, "constant cannot depend on a variable")
+		}
+		if b.kind == "iota" && c.constantDepth == 0 {
+			checkFail(c, node.at, "iota requires a constant declaration")
+		}
+		switch b.kind {
+		case "type", "func", "native", "intrinsic", "generic":
+			return CheckedValue{typeID: b.typeID, kind: b.kind, name: node.text}
+		}
+		return CheckedValue{typeID: b.typeID, kind: "value", addressable: b.kind == "var" || b.kind == "param"}
+	case "ParenExpr":
+		return checkExpression(c, scope, childAt(node, 0), expected)
+	case "SelectorExpr":
+		receiver := checkExpression(c, scope, childAt(node, 0), tInvalid)
+		field := childAt(node, 1)
+		id := fieldType(c, receiver.typeID, field.text)
+		if receiver.kind != "value" || id == tInvalid {
+			checkFail(c, field.at, "unknown field "+field.text)
+		}
+		return CheckedValue{typeID: id, kind: "value", addressable: receiver.addressable || checkedType(c, receiver.typeID).kind == "pointer"}
+	case "StarExpr":
+		value := checkExpression(c, scope, childAt(node, 0), tInvalid)
+		if value.kind == "type" {
+			return CheckedValue{typeID: compoundType(c, "pointer", 0, value.typeID), kind: "type"}
+		}
+		t := checkedType(c, value.typeID)
+		if t.kind != "pointer" || value.kind != "value" {
+			checkFail(c, node.at, "dereference requires a pointer")
+		}
+		return CheckedValue{typeID: t.elem, kind: "value", addressable: true}
+	case "UnaryExpr":
+		child := childAt(node, 0)
+		value := checkExpression(c, scope, child, tInvalid)
+		if node.text == "&" {
+			if value.kind != "value" || (!value.addressable && withoutParens(child).kind != "CompositeLit") {
+				checkFail(c, node.at, "address requires a variable or composite literal")
+			}
+			return expressionValue(compoundType(c, "pointer", 0, value.typeID))
+		}
+		wanted := tInt
+		if node.text == "!" {
+			wanted = tBool
+		}
+		requireType(c, child, value, wanted)
+		return expressionValue(value.typeID)
+	case "BinaryExpr":
+		return binaryExpression(c, scope, node)
+	case "CompositeLit":
+		return compositeExpression(c, scope, node, expected)
+	case "CallExpr":
+		return callExpression(c, scope, node)
+	case "IndexExpr", "IndexListExpr":
+		return CheckedValue{typeID: typeSyntax(c, scope, node), kind: "type"}
+	}
+	checkFail(c, node.at, "unsupported expression "+node.kind)
+	return CheckedValue{}
+}
+
+func binaryValues(c *Checker, node SyntaxNode, left CheckedValue, right CheckedValue) CheckedValue {
+	if left.kind != "value" || right.kind != "value" || left.typeID == tVoid || right.typeID == tVoid {
+		checkFail(c, node.at, "operator requires values")
+		return CheckedValue{}
+	}
+	id := left.typeID
+	if !assignable(c, right.typeID, id) {
+		if assignable(c, id, right.typeID) {
+			id = right.typeID
+		} else {
+			checkFail(c, node.at, "operator type mismatch")
+		}
+	}
+	basic := defaultType(id)
+	switch node.text {
+	case "==", "!=":
+		kind := checkedType(c, id).kind
+		if kind == "list" || kind == "map" {
+			if left.typeID != tNil && right.typeID != tNil {
+				checkFail(c, node.at, "collections can only be compared with nil")
+			}
+		}
+		if !comparableType(c, id) && left.typeID != tNil && right.typeID != tNil {
+			checkFail(c, node.at, "type is not comparable")
+		}
+		if left.typeID == tNil && right.typeID == tNil {
+			checkFail(c, node.at, "nil needs a concrete type")
+		}
+		return expressionValue(tUntypedBool)
+	case "<", "<=", ">", ">=":
+		if basic != tInt && basic != tString {
+			checkFail(c, node.at, "comparison requires int or string")
+		}
+		return expressionValue(tUntypedBool)
+	case "&&", "||":
+		if basic != tBool {
+			checkFail(c, node.at, "logical operator requires bool")
+		}
+	case "+":
+		if basic != tInt && basic != tString {
+			checkFail(c, node.at, "addition requires int or string")
+		}
+	case "<<", ">>":
+		if defaultType(left.typeID) != tInt || defaultType(right.typeID) != tInt {
+			checkFail(c, node.at, "shift requires int operands")
+		}
+		id = left.typeID
+	default:
+		if basic != tInt {
+			checkFail(c, node.at, "arithmetic requires int")
+		}
+	}
+	return expressionValue(id)
+}
+
+// Flatten the left spine: lexer/parser tools contain long operator chains.
+// Tree depth, rather than the number of operators, controls the recursion bound.
+func binaryExpression(c *Checker, scope *TypeScope, node SyntaxNode) CheckedValue {
+	var pending List[SyntaxNode]
+	left := node
+	for left.kind == "BinaryExpr" {
+		pending = prepend(left, pending)
+		left = childAt(left, 0)
+	}
+	value := checkExpression(c, scope, left, tInvalid)
+	for _, operator := range pending {
+		right := checkExpression(c, scope, childAt(operator, 1), tInvalid)
+		value = binaryValues(c, operator, value, right)
+	}
+	return value
+}
+
+func compositeExpression(c *Checker, scope *TypeScope, node SyntaxNode, expected int) CheckedValue {
+	typeNode := childAt(node, 0)
+	id := expected
+	if typeNode.kind != "nil" {
+		id = typeSyntax(c, scope, typeNode)
+	}
+	t := checkedType(c, id)
+	fieldID := id
+	if typeNode.kind == "nil" && t.kind == "pointer" {
+		fieldID = t.elem
+		t = checkedType(c, t.elem)
+	}
+	if t.kind != "struct" && t.kind != "list" && t.kind != "map" && t.kind != "delivery" {
+		checkFail(c, node.at, "expected a composite type")
+	}
+	fields := t.fields
+	if t.kind == "delivery" {
+		fields = List[CheckedField]{CheckedField{name: "value", typeID: t.elem}, CheckedField{name: "ok", typeID: tBool}}
+	}
+	position := 0
+	style := ""
+	var seen Map[string, bool]
+	for _, element := range tail(node.children) {
+		valueNode := element
+		valueType := t.elem
+		if t.kind == "struct" || t.kind == "delivery" {
+			currentStyle := "positional"
+			if element.kind == "KeyValueExpr" {
+				currentStyle = "keyed"
+				key := childAt(element, 0)
+				valueNode = childAt(element, 1)
+				valueType = fieldType(c, fieldID, key.text)
+				if key.kind != "Ident" || valueType == tInvalid || get(seen, key.text).ok {
+					checkFail(c, key.at, "unknown or duplicate literal field")
+				}
+				seen = put(seen, key.text, true)
+			} else {
+				valueType = head(fields).value.typeID
+				if !head(fields).ok {
+					checkFail(c, element.at, "too many struct values")
+				}
+				fields = tail(fields)
+			}
+			if style != "" && style != currentStyle {
+				checkFail(c, element.at, "mixed keyed and positional struct values")
+			}
+			style = currentStyle
+		} else if t.kind == "map" {
+			if element.kind != "KeyValueExpr" {
+				checkFail(c, element.at, "Map literal needs keys")
+			}
+			key := childAt(element, 0)
+			requireType(c, key, checkExpression(c, scope, key, t.key), t.key)
+			valueNode = childAt(element, 1)
+		} else if element.kind == "KeyValueExpr" {
+			// Index evaluation/duplicate constant indices belong to constant checking.
+			key := childAt(element, 0)
+			requireType(c, key, checkExpression(c, scope, key, tInt), tInt)
+			valueNode = childAt(element, 1)
+		}
+		requireType(c, valueNode, checkExpression(c, scope, valueNode, valueType), valueType)
+		position++
+	}
+	if style == "positional" && head(fields).ok {
+		checkFail(c, node.at, "too few struct values")
+	}
+	return expressionValue(id)
+}
+
+func callExpression(c *Checker, scope *TypeScope, node SyntaxNode) CheckedValue {
+	callee := childAt(node, 0)
+	parenthesized := false
+	for callee.kind == "ParenExpr" {
+		parenthesized = true
+		callee = childAt(callee, 0)
+	}
+	var reversed List[int]
+	baseParenthesized := false
+	if callee.kind == "IndexExpr" || callee.kind == "IndexListExpr" {
+		for _, argument := range tail(callee.children) {
+			reversed = prepend(typeSyntax(c, scope, argument), reversed)
+		}
+		callee = childAt(callee, 0)
+		baseParenthesized = callee.kind == "ParenExpr"
+	}
+	var explicit List[int]
+	for _, id := range reversed {
+		explicit = prepend(id, explicit)
+	}
+	function := checkExpression(c, scope, callee, tInvalid)
+	var argsReversed List[CheckedValue]
+	for _, argument := range tail(node.children) {
+		argsReversed = prepend(checkExpression(c, scope, argument, tInvalid), argsReversed)
+	}
+	var values List[CheckedValue]
+	for _, value := range argsReversed {
+		values = prepend(value, values)
+	}
+	if c.constantDepth > 0 && function.kind != "type" && !(function.kind == "intrinsic" && function.name == "len" && defaultType(valueAt(values, 0).typeID) == tString) {
+		checkFail(c, node.at, "constant requires a constant expression")
+	}
+	if function.kind == "intrinsic" {
+		name := function.name
+		if baseParenthesized {
+			checkFail(c, callee.at, "generic function needs instantiation before parentheses")
+		}
+		if parenthesized && len(explicit) == 0 && (name == "head" || name == "tail" || name == "prepend" || name == "get" || name == "put" || name == "remove" || name == "send" || name == "spawn" || name == "spawnMonitor" || name == "supervise") {
+			checkFail(c, callee.at, "generic function needs instantiation inside parentheses")
+		}
+		if parenthesized && (name == "get" || name == "put" || name == "remove") && len(explicit) < 2 {
+			checkFail(c, callee.at, "parenthesized Map function needs both type arguments")
+		}
+		if (name == "receive" || name == "send" || name == "spawn" || name == "spawnMonitor" || name == "supervise" || name == "head" || name == "tail" || name == "prepend") && len(explicit) > 1 {
+			checkFail(c, callee.at, "too many type arguments")
+		}
+		if (name == "get" || name == "put" || name == "remove") && len(explicit) > 2 {
+			checkFail(c, callee.at, "too many Map type arguments")
+		}
+		if (name == "print" || name == "println" || name == "panic" || name == "len" || name == "append" || name == "new" || name == "make") && len(explicit) != 0 {
+			checkFail(c, callee.at, "builtin cannot have type arguments")
+		}
+		if node.text == "..." && (name != "append" || len(values) != 2) {
+			checkFail(c, node.at, "invalid variadic call")
+		}
+		return expressionValue(nativeCall(c, scope, node, name, explicit, values))
+	}
+	if head(explicit).ok || node.text == "..." {
+		checkFail(c, node.at, "function is not generic or variadic")
+	}
+	if function.kind == "type" {
+		requireArity(c, node, values, 1)
+		value := valueAt(values, 0)
+		from := defaultType(value.typeID)
+		to := function.typeID
+		if value.kind != "value" || (from != to && !(from == tInt && to == tString)) {
+			checkFail(c, node.at, "unsupported conversion")
+		}
+		return expressionValue(to)
+	}
+	if function.kind != "func" && function.kind != "native" {
+		checkFail(c, callee.at, "cannot call this value")
+	}
+	signature := checkedType(c, function.typeID)
+	requireArity(c, node, values, len(signature.params))
+	for _, id := range signature.params {
+		requireType(c, node, head(values).value, id)
+		values = tail(values)
+	}
+	return expressionValue(signature.result)
+}

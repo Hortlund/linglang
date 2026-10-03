@@ -1,0 +1,164 @@
+package main
+
+func parseNames(p *Parser) List[SyntaxNode] {
+	var reversed List[SyntaxNode]
+	reversed = prepend(parseIdent(p), reversed)
+	for accept(p, ",") {
+		reversed = prepend(parseIdent(p), reversed)
+	}
+	return syntaxOrder(reversed)
+}
+
+func parseField(p *Parser) SyntaxNode {
+	at := p.current
+	names := parseNames(p)
+	typ := parseType(p)
+	return syntax("Field", at, "", List[SyntaxNode]{syntax("Names", at, "", names), typ})
+}
+
+func parameterField(typ SyntaxNode) SyntaxNode {
+	return syntax("Field", typ.at, "", List[SyntaxNode]{syntax("Names", typ.at, "", nil), typ})
+}
+
+// A comma can separate parameters or grouped names. Resolve the group when a
+// type follows; otherwise each candidate is an unnamed parameter type.
+func parseParameters(p *Parser, opening Token) SyntaxNode {
+	var reversed List[SyntaxNode]
+	named := false
+	unnamed := false
+	for p.reason == "" && p.current.kind != ")" {
+		first := parseType(p)
+		candidates := List[SyntaxNode]{first}
+		for first.kind == "Ident" && accept(p, ",") {
+			if p.current.kind == ")" {
+				break
+			}
+			next := parseType(p)
+			candidates = prepend(next, candidates)
+			if next.kind != "Ident" {
+				break
+			}
+		}
+		if p.current.kind == "IDENT" || p.current.kind == "*" || p.current.kind == "struct" || p.current.kind == "(" {
+			named = true
+			for _, name := range candidates {
+				if name.kind != "Ident" {
+					parseFail(p, "parameter names must be identifiers")
+				}
+			}
+			typ := parseType(p)
+			reversed = prepend(syntax("Field", first.at, "", List[SyntaxNode]{syntax("Names", first.at, "", syntaxOrder(candidates)), typ}), reversed)
+		} else {
+			unnamed = true
+			for _, typ := range syntaxOrder(candidates) {
+				reversed = prepend(parameterField(typ), reversed)
+			}
+		}
+		if named && unnamed {
+			parseFail(p, "cannot mix named and unnamed parameters")
+		}
+		if !accept(p, ",") {
+			break
+		}
+	}
+	expect(p, ")")
+	return syntax("FieldList", opening, "", syntaxOrder(reversed))
+}
+
+func parseStruct(p *Parser) SyntaxNode {
+	at := expect(p, "struct")
+	opening := expect(p, "{")
+	var reversed List[SyntaxNode]
+	for p.reason == "" && p.current.kind != "}" {
+		reversed = prepend(parseField(p), reversed)
+		statementEnd(p)
+	}
+	expect(p, "}")
+	fields := syntax("FieldList", opening, "", syntaxOrder(reversed))
+	return syntax("StructType", at, "", List[SyntaxNode]{fields})
+}
+
+func parseFunction(p *Parser) SyntaxNode {
+	at := expect(p, "func")
+	name := parseIdent(p)
+	opening := expect(p, "(")
+	params := parseParameters(p, opening)
+	results := noSyntax()
+	if p.current.kind != "{" && p.reason == "" {
+		opening = p.current
+		if accept(p, "(") {
+			results = parseParameters(p, opening)
+		} else {
+			results = syntax("FieldList", opening, "", List[SyntaxNode]{parameterField(parseType(p))})
+		}
+		if len(results.children) > 1 {
+			parseFail(p, "multiple return values are not supported")
+		}
+		for _, field := range results.children {
+			if len(childAt(field, 0).children) > 0 {
+				parseFail(p, "named return values are not supported")
+			}
+		}
+	}
+	body := parseBlock(p)
+	return syntax("FuncDecl", at, "", List[SyntaxNode]{name, params, results, body})
+}
+
+func parseDeclaration(p *Parser, local bool) SyntaxNode {
+	at := p.current
+	if at.kind != "type" && at.kind != "const" && at.kind != "var" {
+		parseFail(p, "unsupported declaration "+at.kind)
+		return noSyntax()
+	}
+	if !local && at.kind == "var" {
+		parseFail(p, "top-level variables are not supported")
+		return noSyntax()
+	}
+	parseAdvance(p)
+	group := accept(p, "(")
+	var reversed List[SyntaxNode]
+	for p.reason == "" {
+		if group && p.current.kind == ")" {
+			break
+		}
+		var spec SyntaxNode
+		start := p.current
+		if at.kind == "type" {
+			name := parseIdent(p)
+			if p.current.kind != "struct" {
+				parseFail(p, "type declarations require a non-generic struct")
+			}
+			typ := parseType(p)
+			spec = syntax("TypeSpec", start, "", List[SyntaxNode]{name, typ})
+		} else {
+			names := parseNames(p)
+			typ := noSyntax()
+			if p.current.kind == "IDENT" || p.current.kind == "*" || p.current.kind == "struct" || p.current.kind == "(" {
+				typ = parseType(p)
+			}
+			var values List[SyntaxNode]
+			if accept(p, "=") {
+				values = parseExpressionList(p, false)
+			} else {
+				if at.kind == "var" && typ.kind == "nil" {
+					parseFail(p, "variable declaration needs a type or value")
+				}
+				if at.kind == "const" && (!group || !head(reversed).ok || typ.kind != "nil") {
+					parseFail(p, "constant declaration needs a value")
+				}
+			}
+			spec = syntax("ValueSpec", start, "", List[SyntaxNode]{syntax("Names", start, "", names), typ, syntax("Values", start, "", values)})
+		}
+		reversed = prepend(spec, reversed)
+		if !group {
+			break
+		}
+		if p.current.kind != ")" {
+			expect(p, ";")
+		}
+	}
+	if group {
+		expect(p, ")")
+	}
+	return syntax("GenDecl", at, at.kind, syntaxOrder(reversed))
+}

@@ -1,0 +1,32 @@
+package main
+
+func main() {
+	if !head(args()).ok {
+		panic("usage: resolver <source.lang> [source.lang...]")
+	}
+	var reversed List[SyntaxNode]
+	for _, filename := range args() {
+		input := readFile(filename)
+		if !input.ok {
+			panic("cannot read " + filename + ": " + input.reason)
+		}
+		parsed := parse(filename, input.value)
+		if !parsed.ok {
+			panic(filename + ":" + formatInt(parsed.line) + ":" + formatInt(parsed.column) + ": " + parsed.reason)
+		}
+		reversed = prepend(parsed.root, reversed)
+	}
+	result := resolve(syntaxOrder(reversed))
+	if !result.ok {
+		panic(result.at.filename + ":" + formatInt(result.at.line) + ":" + formatInt(result.at.column) + ": " + result.reason)
+	}
+	for _, symbol := range result.definitions {
+		println("def", quotedText(symbol.name), symbol.kind, quotedText(symbol.at.filename), formatInt(symbol.at.offset))
+	}
+	for _, reference := range result.references {
+		println("use", quotedText(reference.at.filename), formatInt(reference.at.offset), quotedText(reference.symbol.name), quotedText(reference.symbol.at.filename), formatInt(reference.symbol.at.offset))
+	}
+	for _, at := range result.deferred {
+		println("defer", quotedText(at.filename), formatInt(at.offset))
+	}
+}

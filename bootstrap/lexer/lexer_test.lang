@@ -1,0 +1,83 @@
+package main
+
+func kinds(result LexResult) string {
+	assert(result.ok)
+	var reversed List[string]
+	for _, item := range result.tokens {
+		reversed = prepend(item.kind, reversed)
+	}
+	var parts List[string]
+	for _, part := range reversed {
+		parts = prepend(part, parts)
+	}
+	return join(parts, " ")
+}
+
+func TestTokensAndSemicolons() {
+	result := lex("bean.lang", "package main\nfunc main() { n := 0x_FF; n++ // bean\nprintln(n) }")
+	assert(kinds(result) == "package IDENT ; func IDENT ( ) { IDENT := INT ; IDENT ++ COMMENT ; IDENT ( IDENT ) } ; EOF")
+	for _, item := range result.tokens {
+		assert(item.filename == "bean.lang")
+		assert(item.offset >= 0 && item.line > 0 && item.column > 0)
+		if item.implicit {
+			assert(item.kind == ";" && item.text == "\n")
+		}
+	}
+	assert(kinds(lex("empty", "")) == "EOF")
+	assert(kinds(lex("operator", "+\n-\n")) == "+ - EOF")
+	assert(kinds(lex("comment", "n /* a\nb */ + 2")) == "IDENT COMMENT ; + INT ; EOF")
+	assert(kinds(lex("comment", "n /* a */ + 2")) == "IDENT COMMENT + INT ; EOF")
+}
+
+func TestUnicodeAndLocations() {
+	result := lex("雪.lang", "\ufeff雪٢ := 1\r\n\t雪٢++")
+	assert(result.ok)
+	first := head(result.tokens).value
+	assert(first.text == "雪٢" && first.offset == 3 && first.line == 1 && first.column == 4)
+	for _, item := range result.tokens {
+		if item.line == 2 && item.kind == "IDENT" {
+			assert(item.column == 2 && item.text == "雪٢")
+		}
+	}
+	end := head(lex("end", "x\n").tokens)
+	assert(end.ok)
+	assert(!lex("mark", "x\ufeff").ok)
+	assert(!lex("invalid", "// \xff").ok)
+	assert(!lex("nul", "`\x00`").ok)
+}
+
+func TestLiteralsAndOperators() {
+	assert(kinds(lex("ints", "0 0123 0o_77 0b_101 0X_FF 1_000 9223372036854775808")) == "INT INT INT INT INT INT INT ; EOF")
+	assert(kinds(lex("strings", "\"a\\n雪\" '\\xFF' '\\U0001F600' `raw\ntext`")) == "STRING CHAR CHAR STRING ; EOF")
+	assert(kinds(lex("ops", "<<= >>= &^= ... ++ -- := <- && || &^ <= !=")) == "<<= >>= &^= ... ++ -- := <- && || &^ <= != EOF")
+	assert(kinds(lex("keywords", "return\nbreak\ncontinue\nfallthrough")) == "return ; break ; continue ; fallthrough ; EOF")
+}
+
+func TestMalformedInput() {
+	for _, source := range (List[string]{"0x", "0b2", "09", "1__2", "1_", "0x__1", "1.5", ".5", "1e3", "0x1p2", "\"unterminated", "/* unterminated", "'ab'", "''", "'\\400'", "\"\\q\"", "\"\\uD800\"", "\"\\U00110000\"", "\"\\x0g\"", "@", "\xff"}) {
+		result := lex("bad.lang", source)
+		assert(!result.ok && result.reason != "" && result.filename == "bad.lang")
+		assert(result.offset >= 0 && result.offset <= len(source) && result.line > 0 && result.column > 0)
+	}
+	result := lex("location", "x\n  @")
+	assert(!result.ok && result.offset == 4 && result.line == 2 && result.column == 3)
+	result = lex("location", "x\n  /* unfinished")
+	assert(!result.ok && result.offset == 4 && result.line == 2 && result.column == 3)
+}
+
+func TestEveryTruncatedPrefixTerminates() {
+	source := "func Test雪(){n:=0x_FF;println(\"bean\\u96ea\")/* hi\nthere */}"
+	for end := 0; end <= len(source); end++ {
+		result := lex("prefix", slice(source, 0, end))
+		if !result.ok {
+			assert(result.reason != "" && result.offset >= 0 && result.offset <= end)
+			continue
+		}
+		last := ""
+		for _, item := range result.tokens {
+			assert(item.offset >= 0 && item.offset <= end)
+			last = item.kind
+		}
+		assert(last == "EOF")
+	}
+}

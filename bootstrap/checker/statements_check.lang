@@ -1,0 +1,182 @@
+package main
+
+func checkStatements(c *Checker, scope *TypeScope, statements List[SyntaxNode], result int) {
+	for _, statement := range statements {
+		checkStatement(c, scope, statement, result)
+	}
+}
+
+func assignmentTarget(c *Checker, scope *TypeScope, node SyntaxNode) CheckedValue {
+	value := checkExpression(c, scope, node, tInvalid)
+	if !value.addressable || value.kind != "value" {
+		checkFail(c, node.at, "assignment requires a variable")
+	}
+	return value
+}
+
+func checkAssignment(c *Checker, scope *TypeScope, node SyntaxNode) {
+	lhs := childAt(node, 0).children
+	rhs := childAt(node, 1).children
+	if len(lhs) != len(rhs) {
+		checkFail(c, node.at, "assignment value count mismatch")
+	}
+	// Evaluate all RHS in the old scope before binding any new LHS names.
+	var reversed List[CheckedValue]
+	for _, expression := range rhs {
+		reversed = prepend(checkExpression(c, scope, expression, tInvalid), reversed)
+	}
+	var values List[CheckedValue]
+	for _, value := range reversed {
+		values = prepend(value, values)
+	}
+	for _, target := range lhs {
+		value := head(values).value
+		values = tail(values)
+		if target.kind == "Ident" && target.text == "_" {
+			if node.text != "=" && node.text != ":=" {
+				checkFail(c, target.at, "compound assignment requires a variable")
+			}
+			if value.kind != "value" || value.typeID == tVoid || value.typeID == tNil {
+				checkFail(c, target.at, "blank assignment requires a concrete value")
+			}
+		} else if node.text == ":=" && !get(scope.names, target.text).ok {
+			if value.kind != "value" || value.typeID == tVoid || value.typeID == tNil {
+				checkFail(c, target.at, "cannot infer a variable type")
+			}
+			bindType(scope, target.text, "var", defaultType(value.typeID))
+		} else {
+			variable := assignmentTarget(c, scope, target)
+			if node.text != "=" && node.text != ":=" {
+				operator := SyntaxNode{kind: "BinaryExpr", at: node.at, text: slice(node.text, 0, len(node.text)-1)}
+				value = binaryValues(c, operator, variable, value)
+			}
+			requireType(c, target, value, variable.typeID)
+		}
+	}
+}
+
+func checkStatement(c *Checker, scope *TypeScope, node SyntaxNode, result int) {
+	if c.reason != "" {
+		return
+	}
+	switch node.kind {
+	case "nil", "EmptyStmt", "BranchStmt":
+		return
+	case "BlockStmt":
+		block := TypeScope{parent: scope}
+		checkStatements(c, &block, node.children, result)
+	case "DeclStmt":
+		declaration := childAt(node, 0)
+		if declaration.text == "type" {
+			// Local grouped types enter scope one spec at a time.
+			for _, spec := range declaration.children {
+				one := SyntaxNode{kind: "GenDecl", text: "type", children: List[SyntaxNode]{spec}}
+				registerTypes(c, scope, List[SyntaxNode]{one})
+				completeTypes(c, scope, List[SyntaxNode]{one})
+				validateDeclarations(c, scope, List[SyntaxNode]{one})
+			}
+		} else {
+			checkValues(c, scope, declaration)
+		}
+	case "AssignStmt":
+		checkAssignment(c, scope, node)
+	case "IncDecStmt":
+		child := childAt(node, 0)
+		requireType(c, child, assignmentTarget(c, scope, child), tInt)
+	case "ReturnStmt":
+		wanted := 1
+		if result == tVoid {
+			wanted = 0
+		}
+		if len(node.children) != wanted {
+			checkFail(c, node.at, "return value count mismatch")
+		}
+		for _, child := range node.children {
+			requireType(c, child, checkExpression(c, scope, child, result), result)
+		}
+	case "ExprStmt":
+		child := childAt(node, 0)
+		checkExpression(c, scope, child, tInvalid)
+		if child.kind != "CallExpr" {
+			checkFail(c, child.at, "expression statement requires a call")
+		} else {
+			callee := withoutParens(childAt(child, 0))
+			if callee.kind == "IndexExpr" || callee.kind == "IndexListExpr" {
+				callee = withoutParens(childAt(callee, 0))
+			}
+			function := checkExpression(c, scope, callee, tInvalid)
+			if function.kind == "type" || (function.kind == "intrinsic" && (function.name == "len" || function.name == "append" || function.name == "new" || function.name == "make")) {
+				checkFail(c, child.at, "unused builtin result")
+			}
+		}
+	case "IfStmt":
+		block := TypeScope{parent: scope}
+		checkStatement(c, &block, childAt(node, 0), result)
+		condition := childAt(node, 1)
+		requireType(c, condition, checkExpression(c, &block, condition, tInvalid), tBool)
+		checkStatement(c, &block, childAt(node, 2), result)
+		checkStatement(c, &block, childAt(node, 3), result)
+	case "ForStmt":
+		block := TypeScope{parent: scope}
+		checkStatement(c, &block, childAt(node, 0), result)
+		condition := childAt(node, 1)
+		if condition.kind != "nil" {
+			requireType(c, condition, checkExpression(c, &block, condition, tInvalid), tBool)
+		}
+		checkStatement(c, &block, childAt(node, 2), result)
+		checkStatement(c, &block, childAt(node, 3), result)
+	case "RangeStmt":
+		sequence := checkExpression(c, scope, childAt(node, 2), tInvalid)
+		t := checkedType(c, sequence.typeID)
+		if sequence.kind != "value" || (t.kind != "list" && t.kind != "map") {
+			checkFail(c, node.at, "range requires List or Map")
+		}
+		keyType := tInt
+		if t.kind == "map" {
+			keyType = t.key
+		}
+		block := TypeScope{parent: scope}
+		index := 0
+		for _, id := range (List[int]{keyType, t.elem}) {
+			name := childAt(node, index)
+			if name.kind != "nil" && name.text != "_" {
+				if node.text == ":=" {
+					bindType(&block, name.text, "var", id)
+				} else {
+					requireType(c, name, expressionValue(id), assignmentTarget(c, scope, name).typeID)
+				}
+			}
+			index++
+		}
+		checkStatement(c, &block, childAt(node, 3), result)
+	case "SwitchStmt":
+		block := TypeScope{parent: scope}
+		checkStatement(c, &block, childAt(node, 0), result)
+		tag := childAt(node, 1)
+		id := tBool
+		if tag.kind != "nil" {
+			value := checkExpression(c, &block, tag, tInvalid)
+			id = defaultType(value.typeID)
+			if value.kind != "value" || id == tNil || id == tVoid {
+				checkFail(c, tag.at, "switch requires a value")
+			}
+			kind := checkedType(c, id).kind
+			// Lists/maps can switch against nil. Structs containing them cannot.
+			if kind != "list" && kind != "map" && !comparableType(c, id) {
+				checkFail(c, tag.at, "switch type is not comparable")
+			}
+		}
+		for _, clause := range childAt(node, 2).children {
+			for _, value := range childAt(clause, 0).children {
+				checked := checkExpression(c, &block, value, id)
+				requireType(c, value, checked, id)
+				comparison := SyntaxNode{at: value.at, text: "=="}
+				binaryValues(c, comparison, expressionValue(id), checked)
+			}
+			caseScope := TypeScope{parent: &block}
+			checkStatements(c, &caseScope, childAt(clause, 1).children, result)
+		}
+	default:
+		checkFail(c, node.at, "unsupported statement "+node.kind)
+	}
+}

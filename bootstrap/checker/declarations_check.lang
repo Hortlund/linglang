@@ -1,0 +1,211 @@
+package main
+
+func registerTypes(c *Checker, scope *TypeScope, declarations List[SyntaxNode]) {
+	for _, declaration := range declarations {
+		if declaration.kind == "GenDecl" && declaration.text == "type" {
+			for _, spec := range declaration.children {
+				name := childAt(spec, 0)
+				bindType(scope, name.text, "type", addType(c, CheckedType{kind: "struct", name: name.text}))
+			}
+		}
+	}
+}
+
+func completeTypes(c *Checker, scope *TypeScope, declarations List[SyntaxNode]) {
+	for _, declaration := range declarations {
+		if declaration.kind == "GenDecl" && declaration.text == "type" {
+			for _, spec := range declaration.children {
+				name := childAt(spec, 0)
+				id := typedName(scope, name.text).value.typeID
+				t := checkedType(c, id)
+				body := childAt(spec, 1)
+				if body.kind != "StructType" {
+					checkFail(c, body.at, "only named struct types are supported")
+				}
+				var fields List[CheckedField]
+				var seen Map[string, bool]
+				for _, field := range childAt(body, 0).children {
+					fieldID := typeSyntax(c, scope, childAt(field, 1))
+					for _, fieldName := range childAt(field, 0).children {
+						if fieldName.text == "_" || get(seen, fieldName.text).ok {
+							checkFail(c, fieldName.at, "invalid or duplicate struct field")
+						}
+						seen = put(seen, fieldName.text, true)
+						fields = prepend(CheckedField{name: fieldName.text, typeID: fieldID}, fields)
+					}
+				}
+				for _, field := range fields {
+					t.fields = prepend(field, t.fields)
+				}
+				c.types = put(c.types, id, t)
+			}
+		}
+	}
+}
+
+func functionType(c *Checker, scope *TypeScope, declaration SyntaxNode) int {
+	var reversed List[int]
+	for _, field := range childAt(declaration, 1).children {
+		id := typeSyntax(c, scope, childAt(field, 1))
+		count := len(childAt(field, 0).children)
+		if count == 0 {
+			count = 1
+		}
+		for count > 0 {
+			reversed = prepend(id, reversed)
+			count--
+		}
+	}
+	var params List[int]
+	for _, id := range reversed {
+		params = prepend(id, params)
+	}
+	result := tVoid
+	for _, field := range childAt(declaration, 2).children {
+		result = typeSyntax(c, scope, childAt(field, 1))
+	}
+	name := childAt(declaration, 0)
+	if (name.text == "main" || name.text == "init") && (len(params) != 0 || result != tVoid) {
+		checkFail(c, name.at, name.text+" must have no arguments or return values")
+	}
+	return addType(c, CheckedType{kind: "func", params: params, result: result})
+}
+
+func checkValues(c *Checker, scope *TypeScope, declaration SyntaxNode) {
+	previous := noSyntax()
+	for _, spec := range declaration.children {
+		values := childAt(spec, 2)
+		typeNode := childAt(spec, 1)
+		if declaration.text == "const" && len(values.children) == 0 {
+			if previous.kind == "nil" {
+				checkFail(c, spec.at, "constant needs an initializer")
+			}
+			values = childAt(previous, 2)
+			typeNode = childAt(previous, 1)
+		} else {
+			previous = spec
+		}
+		expected := tInvalid
+		if typeNode.kind != "nil" {
+			expected = typeSyntax(c, scope, typeNode)
+		}
+		if declaration.text == "const" {
+			c.constantDepth++
+		}
+		var reversed List[CheckedValue]
+		for _, value := range values.children {
+			reversed = prepend(checkExpression(c, scope, value, expected), reversed)
+		}
+		if declaration.text == "const" {
+			c.constantDepth--
+		}
+		var checked List[CheckedValue]
+		for _, value := range reversed {
+			checked = prepend(value, checked)
+		}
+		names := childAt(spec, 0).children
+		if len(checked) != 0 && len(checked) != len(names) {
+			checkFail(c, spec.at, "declaration value count mismatch")
+		}
+		for _, name := range names {
+			id := expected
+			if head(checked).ok {
+				value := head(checked).value
+				if expected != tInvalid {
+					requireType(c, name, value, expected)
+				} else {
+					id = value.typeID
+					if value.kind != "value" || id == tNil || id == tVoid {
+						checkFail(c, name.at, "cannot infer a variable type")
+					}
+				}
+				checked = tail(checked)
+			}
+			if id == tInvalid {
+				checkFail(c, name.at, "declaration needs a type or value")
+			}
+			if declaration.text == "const" && defaultType(id) != tInt && defaultType(id) != tBool && defaultType(id) != tString {
+				checkFail(c, name.at, "constant requires int, bool, or string")
+			}
+			if declaration.text != "const" {
+				id = defaultType(id)
+			}
+			bindType(scope, name.text, declaration.text, id)
+		}
+	}
+}
+
+func checkFunction(c *Checker, scope *TypeScope, declaration SyntaxNode) {
+	functionScope := TypeScope{parent: scope}
+	signature := checkedType(c, typedName(scope, childAt(declaration, 0).text).value.typeID)
+	params := signature.params
+	for _, field := range childAt(declaration, 1).children {
+		names := childAt(field, 0).children
+		if len(names) == 0 {
+			params = tail(params)
+		}
+		for _, name := range names {
+			bindType(&functionScope, name.text, "param", head(params).value)
+			params = tail(params)
+		}
+	}
+	checkStatements(c, &functionScope, childAt(declaration, 3).children, signature.result)
+}
+
+// This is a type pass, not the final compiler. Constant evaluation and complete
+// flow/OTP message-safety checking remain with the seed while bootstrapping.
+func checkPackage(files List[SyntaxNode]) CheckResult {
+	bindings := resolve(files)
+	if !bindings.ok {
+		return CheckResult{reason: bindings.reason, at: bindings.at}
+	}
+	c := Checker{next: tVoid}
+	for _, id := range (List[int]{tInt, tBool, tString, tUntypedInt, tUntypedBool, tUntypedString, tNil, tVoid}) {
+		c.types = put(c.types, id, CheckedType{kind: "basic"})
+	}
+	native := TypeScope{}
+	bindType(&native, "int", "type", tInt)
+	bindType(&native, "bool", "type", tBool)
+	bindType(&native, "string", "type", tString)
+	nativeTypes(&c, &native)
+	nativeFunctions(&c, &native)
+	c.native = &native
+	scope := TypeScope{parent: &native}
+	c.global = &scope
+	var reversed List[SyntaxNode]
+	for _, file := range files {
+		for _, declaration := range tail(file.children) {
+			reversed = prepend(declaration, reversed)
+		}
+	}
+	declarations := syntaxOrder(reversed)
+	for _, declaration := range declarations {
+		if declaration.kind == "FuncDecl" {
+			bindType(&scope, childAt(declaration, 0).text, "func", tInvalid)
+		}
+	}
+	registerConstants(&c, &scope, declarations)
+	registerTypes(&c, &scope, declarations)
+	completeTypes(&c, &scope, declarations)
+	validateDeclarations(&c, &scope, declarations)
+	for _, declaration := range declarations {
+		if declaration.kind == "FuncDecl" {
+			bindType(&scope, childAt(declaration, 0).text, "func", functionType(&c, &scope, declaration))
+		}
+	}
+	for _, declaration := range declarations {
+		if declaration.kind == "GenDecl" && declaration.text == "const" {
+			for _, spec := range declaration.children {
+				for _, name := range childAt(spec, 0).children {
+					checkConstant(&c, constantKey(name))
+				}
+			}
+		}
+	}
+	for _, declaration := range declarations {
+		if declaration.kind == "FuncDecl" {
+			checkFunction(&c, &scope, declaration)
+		}
+	}
+	return CheckResult{ok: c.reason == "", reason: c.reason, at: c.at}
+}

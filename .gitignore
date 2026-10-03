@@ -1,9 +1,17 @@
 /bin/
 /_build/
+/_release/
+/dist/
+/*.escript
+/*.tar.gz
 *.beam
 erl_crash.dump
 .DS_Store
 /prime-results.csv
+/editors/vscode/node_modules/
+/editors/vscode/server/
+/editors/vscode/dist/
+*.vsix
 
 # Local AI-generated documentation, handoffs, and reports
 /docs/

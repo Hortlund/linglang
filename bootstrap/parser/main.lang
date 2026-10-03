@@ -1,0 +1,32 @@
+package main
+
+// Preorder records retain child counts, so the dump reconstructs the whole tree.
+// An explicit work list also handles long left-associative expression chains.
+func dumpSyntax(root SyntaxNode) {
+	pending := List[SyntaxNode]{root}
+	for head(pending).ok {
+		node := head(pending).value
+		pending = tail(pending)
+		println(node.kind, formatInt(node.at.offset), formatInt(node.at.line), formatInt(node.at.column), quotedText(node.text), formatInt(len(node.children)))
+		for _, child := range syntaxOrder(node.children) {
+			pending = prepend(child, pending)
+		}
+	}
+}
+
+func main() {
+	options := args()
+	if len(options) != 1 {
+		panic("usage: parser <source.lang>")
+	}
+	filename := head(options).value
+	input := readFile(filename)
+	if !input.ok {
+		panic("cannot read " + filename + ": " + input.reason)
+	}
+	result := parse(filename, input.value)
+	if !result.ok {
+		panic(filename + ":" + formatInt(result.line) + ":" + formatInt(result.column) + ": " + result.reason)
+	}
+	dumpSyntax(result.root)
+}

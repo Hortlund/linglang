@@ -1,0 +1,68 @@
+package main
+
+func resolveStatements(r *Resolver, scope *Scope, statements List[SyntaxNode]) {
+	for _, statement := range statements {
+		resolveStatement(r, scope, statement)
+	}
+}
+
+func resolveStatement(r *Resolver, scope *Scope, statement SyntaxNode) {
+	if r.reason != "" {
+		return
+	}
+	switch statement.kind {
+	case "nil", "EmptyStmt", "BranchStmt":
+		return
+	case "DeclStmt":
+		resolveDeclaration(r, scope, childAt(statement, 0), false)
+	case "AssignStmt":
+		resolveAssignment(r, scope, statement)
+	case "BlockStmt":
+		blockScope := Scope{parent: scope}
+		resolveStatements(r, &blockScope, statement.children)
+	case "IfStmt":
+		ifScope := Scope{parent: scope}
+		resolveStatement(r, &ifScope, childAt(statement, 0))
+		resolveExpression(r, &ifScope, childAt(statement, 1))
+		resolveStatement(r, &ifScope, childAt(statement, 2))
+		resolveStatement(r, &ifScope, childAt(statement, 3))
+	case "ForStmt":
+		forScope := Scope{parent: scope}
+		resolveStatement(r, &forScope, childAt(statement, 0))
+		resolveExpression(r, &forScope, childAt(statement, 1))
+		resolveStatement(r, &forScope, childAt(statement, 2))
+		resolveStatement(r, &forScope, childAt(statement, 3))
+	case "RangeStmt":
+		// The sequence belongs to the enclosing scope, before loop names exist.
+		resolveExpression(r, scope, childAt(statement, 2))
+		rangeScope := Scope{parent: scope}
+		for _, name := range (List[SyntaxNode]{childAt(statement, 0), childAt(statement, 1)}) {
+			if name.kind != "nil" && name.text != "_" {
+				if statement.text == ":=" {
+					defineSymbol(r, &rangeScope, name, "var")
+				} else {
+					useName(r, scope, name)
+				}
+			}
+		}
+		if statement.text == ":=" && len(rangeScope.names) == 0 {
+			resolveFail(r, statement.at, "range declaration needs a new name")
+		}
+		resolveStatement(r, &rangeScope, childAt(statement, 3))
+	case "SwitchStmt":
+		switchScope := Scope{parent: scope}
+		resolveStatement(r, &switchScope, childAt(statement, 0))
+		resolveExpression(r, &switchScope, childAt(statement, 1))
+		for _, clause := range childAt(statement, 2).children {
+			for _, value := range childAt(clause, 0).children {
+				resolveExpression(r, &switchScope, value)
+			}
+			caseScope := Scope{parent: &switchScope}
+			resolveStatements(r, &caseScope, childAt(clause, 1).children)
+		}
+	default:
+		for _, child := range statement.children {
+			resolveExpression(r, scope, child)
+		}
+	}
+}

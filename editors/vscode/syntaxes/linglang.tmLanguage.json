@@ -1,0 +1,151 @@
+{
+  "name": "Linglang",
+  "scopeName": "source.linglang",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#declarations"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#builtins"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "name": "entity.name.function.linglang",
+      "match": "\\b[\\p{L}_][\\p{L}\\p{Nd}_]*\\b(?=\\s*(?:\\[[^\\]\\n]+\\])?\\s*\\()"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.linglang",
+          "begin": "//",
+          "end": "$"
+        },
+        {
+          "name": "comment.block.linglang",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.linglang",
+          "begin": "\"",
+          "end": "\"|(?=$)",
+          "patterns": [
+            {
+              "name": "constant.character.escape.linglang",
+              "match": "\\\\(?:[abfnrtv\\\\\\\"]|[0-7]{3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.linglang",
+          "begin": "'",
+          "end": "'|(?=$)",
+          "patterns": [
+            {
+              "name": "constant.character.escape.linglang",
+              "match": "\\\\(?:[abfnrtv\\\\']|[0-7]{3}|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.raw.linglang",
+          "begin": "`",
+          "end": "`"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.linglang",
+          "match": "\\b(?:package|func|type|struct|const|var|if|else|for|range|switch|case|default|break|continue|fallthrough|return)\\b"
+        },
+        {
+          "name": "constant.language.linglang",
+          "match": "\\b(?:true|false|nil|iota)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.integer.linglang",
+          "match": "\\b(?:0[xX]_?[0-9a-fA-F][0-9a-fA-F_]*|0[bB]_?[01][01_]*|0[oO]_?[0-7][0-7_]*|[0-9][0-9_]*)\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(func)\\s+([\\p{L}_][\\p{L}\\p{Nd}_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.linglang"
+            },
+            "2": {
+              "name": "entity.name.function.linglang"
+            }
+          }
+        },
+        {
+          "match": "\\b(type)\\s+([\\p{L}_][\\p{L}\\p{Nd}_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.linglang"
+            },
+            "2": {
+              "name": "entity.name.type.linglang"
+            }
+          }
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.linglang",
+          "match": "\\b(?:append|args|assert|byteAt|demonitor|formatInt|get|head|isDigit|isLetter|join|len|lookupChild|make|monitor|new|panic|parseInt|prepend|print|println|put|readFile|receive|remove|removeChild|restartChild|runeAt|self|send|slice|spawn|spawnMonitor|split|startSupervisor|stopChild|stopSupervisor|supervise|supervisorPid|tail|trim|wait|writeFile)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.linglang",
+          "match": "\\b(?:Child|ChildOptions|Delivery|Exit|IOResult|IntResult|List|Map|Monitor|Pid|Process|RuneResult|Supervisor|TextResult|bool|int|string)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.linglang",
+          "match": "\\+\\+|--|:=|<<=?|>>=?|&\\^=?|\\.{3}|[+*/%&|^!=<>-]=?|&&|\\|\\|"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,32 @@
+package main
+
+// Quote raw token bytes for the lexer and parser command-line tools.
+func quotedText(text string) string {
+	var reversed List[string]
+	for i := 0; i < len(text); i++ {
+		part := slice(text, i, i+1)
+		switch byteAt(text, i) {
+		case '\n':
+			part = "\\n"
+		case '\r':
+			part = "\\r"
+		case '\t':
+			part = "\\t"
+		case '\\':
+			part = "\\\\"
+		case '"':
+			part = "\\\""
+		}
+		value := byteAt(text, i)
+		if (value < 32 && value != '\n' && value != '\r' && value != '\t') || value == 127 {
+			digits := "0123456789abcdef"
+			part = "\\x" + slice(digits, value/16, value/16+1) + slice(digits, value%16, value%16+1)
+		}
+		reversed = prepend(part, reversed)
+	}
+	var parts List[string]
+	for _, part := range reversed {
+		parts = prepend(part, parts)
+	}
+	return "\"" + join(parts, "") + "\""
+}

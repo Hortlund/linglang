@@ -6,8 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
 
 	"linglang/internal/compiler"
+	"linglang/internal/lsp"
 )
 
 func main() {
@@ -19,11 +23,23 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		fmt.Println("Usage:\n  linglang run [--no-opt] [--gc-stats] [--gc-stress] <file.lang> [args...]\n  linglang build [--no-opt] [-o directory] <file.lang>\n  linglang emit [--no-opt] <file.lang>")
+		fmt.Println("Usage:\n  linglang run [--no-opt] [--gc-stats] [--gc-stress] <file.lang|directory> [args...]\n  linglang check [--no-opt] <file.lang|directory>\n  linglang build [--no-opt] [-o directory] <file.lang|directory>\n  linglang pack [--no-opt] [--gc-stats] [--gc-stress] [-o executable] <file.lang|directory>\n  linglang release [--no-opt] [--gc-stats] [--gc-stress] [-o archive.tar.gz] <file.lang|directory>\n  linglang emit [--no-opt] <file.lang|directory>\n  linglang test [--no-opt] [--gc-stats] [--gc-stress] [--timeout 30s] [file_test.lang|directory]\n  linglang fmt [--check] [file.lang|directory ...]\n  linglang lsp")
 		return nil
 	}
 	command := args[0]
-	if command != "run" && command != "build" && command != "emit" {
+	if command == "lsp" {
+		if len(args) != 1 {
+			return fmt.Errorf("lsp accepts no arguments")
+		}
+		return lsp.NewServer().Serve(os.Stdin, os.Stdout)
+	}
+	if command == "fmt" {
+		return formatCommand(args[1:])
+	}
+	if command == "test" {
+		return testCommand(args[1:])
+	}
+	if command != "run" && command != "check" && command != "build" && command != "pack" && command != "release" && command != "emit" {
 		return fmt.Errorf("unknown command %q (try linglang help)", command)
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -33,7 +49,15 @@ func run(args []string) error {
 	if command == "build" {
 		flags.StringVar(&output, "o", output, "build directory")
 	}
-	if command == "run" {
+	if command == "pack" {
+		output = ""
+		flags.StringVar(&output, "o", output, "output executable (default: <source-name>.escript)")
+	}
+	if command == "release" {
+		output = ""
+		flags.StringVar(&output, "o", output, "output archive (default: <source-name>-<os>-<arch>.tar.gz)")
+	}
+	if command == "run" || command == "pack" || command == "release" {
 		flags.BoolVar(&gcStats, "gc-stats", false, "print managed-heap statistics to stderr")
 		flags.BoolVar(&gcStress, "gc-stress", false, "collect at every safe point (debugging; slower)")
 	}
@@ -41,18 +65,60 @@ func run(args []string) error {
 		return err
 	}
 	if flags.NArg() == 0 || (command != "run" && flags.NArg() != 1) {
-		return fmt.Errorf("%s expects one source file (only run accepts program arguments)", command)
+		return fmt.Errorf("%s expects one source file or directory (only run accepts program arguments)", command)
 	}
-	source, err := os.ReadFile(flags.Arg(0))
+	sources, err := readSources(flags.Arg(0))
 	if err != nil {
 		return err
 	}
-	program, err := compiler.CompileWithOptions(flags.Arg(0), source, compiler.Options{DisableOptimizations: *noOpt})
+	program, err := compiler.CompileFilesWithOptions(sources, compiler.Options{DisableOptimizations: *noOpt})
 	if err != nil {
 		return err
+	}
+	if command == "check" {
+		fmt.Printf("Checked %s (%d source files)\n", flags.Arg(0), len(sources))
+		return nil
 	}
 	if command == "emit" {
 		fmt.Print(program)
+		return nil
+	}
+	if command == "pack" || command == "release" {
+		if output == "" {
+			absolute, err := filepath.Abs(flags.Arg(0))
+			if err != nil {
+				return err
+			}
+			name := filepath.Base(absolute)
+			if info, err := os.Stat(flags.Arg(0)); err == nil && !info.IsDir() {
+				name = name[:len(name)-len(filepath.Ext(name))]
+			}
+			output = name + ".escript"
+			if command == "release" {
+				output = name + "-" + runtime.GOOS + "-" + runtime.GOARCH + ".tar.gz"
+			}
+		}
+		if err := protectSources(output, sources); err != nil {
+			return err
+		}
+		var err error
+		if command == "release" {
+			err = release(output, program, gcStress, gcStats)
+		} else {
+			err = pack(output, program, gcStress, gcStats)
+		}
+		if err != nil {
+			return err
+		}
+		absolute, err := filepath.Abs(output)
+		if err != nil {
+			return err
+		}
+		if command == "release" {
+			fmt.Println("Built runtime release in", absolute)
+		} else {
+			fmt.Println("Packed executable in", absolute)
+		}
 		return nil
 	}
 	dir := output
@@ -84,11 +150,65 @@ func run(args []string) error {
 	return nil
 }
 
+// A directory is one package: only its immediate .lang files are loaded.
+// ReadDir returns filename order; auxiliary files and subdirectories are ignored.
+// Explicit paths may be streams such as /dev/stdin or named pipes.
+func readSources(path string) ([]compiler.SourceFile, error) {
+	return readPackageSources(path, false)
+}
+
+func readPackageSources(path string, includeTests bool) ([]compiler.SourceFile, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	paths := []string{path}
+	directory := info.IsDir()
+	if directory {
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return nil, err
+		}
+		paths = nil
+		for _, entry := range entries {
+			if !includeTests && strings.HasSuffix(entry.Name(), "_test.lang") {
+				continue
+			}
+			if !entry.IsDir() && filepath.Ext(entry.Name()) == ".lang" {
+				paths = append(paths, filepath.Join(path, entry.Name()))
+			}
+		}
+		if len(paths) == 0 {
+			return nil, fmt.Errorf("%s: directory contains no .lang source files", path)
+		}
+	}
+	var sources []compiler.SourceFile
+	for _, filename := range paths {
+		info, err := os.Stat(filename)
+		if err != nil {
+			return nil, err
+		}
+		if directory && !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("%s: source must be a regular file", filename)
+		}
+		data, err := os.ReadFile(filename)
+		if err != nil {
+			return nil, err
+		}
+		sources = append(sources, compiler.SourceFile{Filename: filename, Source: data})
+	}
+	return sources, nil
+}
+
 func evaluationScript(gcStress, gcStats bool) string {
+	return evaluationScriptFor("linglang_program:main()", gcStress, gcStats)
+}
+
+func evaluationScriptFor(entry string, gcStress, gcStats bool) string {
 	// Run language main in a monitored process. An OTP supervisor can terminate
 	// its owner via a link; try/catch alone cannot catch that exit signal.
 	script := fmt.Sprintf("Runner = fun() -> linglang_rt:set_gc_stress(%t), ", gcStress)
-	script += "ExitCode = try linglang_program:main() of _ -> 0 catch Class:Reason:Stack -> io:format(standard_error, \"linglang runtime error: ~p:~p~n~p~n\", [Class, Reason, Stack]), 1 end, "
+	script += "ExitCode = try " + entry + " of _ -> 0 catch error:{linglang_assertion, File, Line} -> io:format(standard_error, \"~ts:~p: assertion failed~n\", [File, Line]), 1; Class:Reason:Stack -> io:format(standard_error, \"linglang runtime error: ~p:~p~n~p~n\", [Class, Reason, Stack]), 1 end, "
 	script += "exit({linglang_completed, ExitCode, linglang_rt:stats()}) end, "
 	script += "{Pid, Ref} = spawn_monitor(Runner), receive {'DOWN', Ref, process, Pid, {linglang_completed, Code, Stats}} -> "
 	if gcStats {
@@ -102,18 +222,27 @@ func evaluationScript(gcStress, gcStats bool) string {
 }
 
 func build(dir, program string) error {
+	files := compiler.RuntimeSources()
+	files["linglang_program.erl"] = program
+	return buildSources(dir, files)
+}
+
+func buildSources(dir string, files map[string]string) error {
 	if _, err := exec.LookPath("erlc"); err != nil {
 		return fmt.Errorf("Erlang/OTP is required: erlc is not on PATH")
 	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	files := compiler.RuntimeSources()
-	files["linglang_program.erl"] = program
+	var names []string
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	args := []string{"-o", dir}
-	for name, source := range files {
+	for _, name := range names {
 		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte(source), 0644); err != nil {
+		if err := os.WriteFile(path, []byte(files[name]), 0644); err != nil {
 			return err
 		}
 		args = append(args, path)

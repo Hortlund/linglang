@@ -2,18 +2,19 @@ package compiler
 
 import (
 	"os"
-	"strings"
+	"path/filepath"
 	"testing"
 )
 
 func TestPrimePoolAssignmentProtocol(t *testing.T) {
-	source, err := os.ReadFile("../../examples/prime_lab.lang")
-	if err != nil {
-		t.Fatal(err)
-	}
-	queueSource, _, ok := strings.Cut(string(source), "func main()")
-	if !ok {
-		t.Fatal("prime lab entry point missing")
+	var sources []SourceFile
+	for _, name := range []string{"messages.lang", "workers.lang", "queue.lang"} {
+		filename := filepath.Join("../../examples/prime_lab", name)
+		source, err := os.ReadFile(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sources = append(sources, SourceFile{Filename: filename, Source: source})
 	}
 	// Controlled workers expose assignments without doing work. Replies all
 	// originate from this test driver, giving the queue a deterministic order
@@ -97,9 +98,19 @@ func main() {
  }
  println("ordered results, retries, duplicate and stale replies: ok")
 }`
-	got, err := executeSupervised(t, strings.TrimPrefix(queueSource, "package main")+testMain)
+	sources = append(sources, SourceFile{Filename: "protocol_test.lang", Source: []byte("package main\n" + testMain)})
+	script := `logger:set_primary_config(level, emergency), linglang_rt:set_gc_stress(true),
+ linglang_program:main(), undefined = get(linglang_supervisors),
+ #{live_cells := 0, root_frames := 0} = linglang_rt:stats(), halt(0).`
 	want := "ordered results, retries, duplicate and stale replies: ok\n"
-	if err != nil || got != want {
-		t.Fatalf("got %q (%v), want %q", got, err, want)
+	for _, options := range []Options{{}, {DisableOptimizations: true}} {
+		program, err := CompileFilesWithOptions(sources, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := executeCompiledScript(t, program, script)
+		if err != nil || got != want {
+			t.Fatalf("options=%+v: got %q (%v), want %q", options, got, err, want)
+		}
 	}
 }

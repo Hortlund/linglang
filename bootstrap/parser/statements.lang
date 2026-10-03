@@ -1,0 +1,228 @@
+package main
+
+func assignmentOperator(kind string) bool {
+	switch kind {
+	case "=", ":=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "&^=":
+		return true
+	}
+	return false
+}
+
+func parseSimple(p *Parser, header bool, rangeAllowed bool) SyntaxNode {
+	at := p.current
+	if p.current.kind == "range" {
+		if !rangeAllowed {
+			parseFail(p, "range is only allowed in a for header")
+			return noSyntax()
+		}
+		parseAdvance(p)
+		return syntax("RangeHeader", at, "", List[SyntaxNode]{syntax("Names", at, "", nil), parseExpression(p, 1, true)})
+	}
+	left := parseExpressionList(p, header)
+	if assignmentOperator(p.current.kind) {
+		op := p.current.kind
+		parseAdvance(p)
+		if p.current.kind == "range" {
+			if !rangeAllowed || (op != "=" && op != ":=") || len(left) > 2 {
+				parseFail(p, "invalid range assignment")
+				return noSyntax()
+			}
+			for _, target := range left {
+				if target.kind != "Ident" {
+					parseFail(p, "range targets must be identifiers")
+				}
+			}
+			parseAdvance(p)
+			return syntax("RangeHeader", at, op, List[SyntaxNode]{syntax("Names", at, "", left), parseExpression(p, 1, true)})
+		}
+		right := parseExpressionList(p, header)
+		return syntax("AssignStmt", at, op, List[SyntaxNode]{syntax("Lhs", at, "", left), syntax("Rhs", at, "", right)})
+	}
+	if len(left) != 1 {
+		parseFail(p, "expression statement needs one expression")
+	}
+	value := head(left).value
+	if p.current.kind == "++" || p.current.kind == "--" {
+		op := p.current.kind
+		parseAdvance(p)
+		return syntax("IncDecStmt", at, op, List[SyntaxNode]{value})
+	}
+	return syntax("ExprStmt", at, "", List[SyntaxNode]{value})
+}
+
+func condition(p *Parser, stmt SyntaxNode) SyntaxNode {
+	if stmt.kind != "ExprStmt" {
+		parseFail(p, "expected condition expression")
+		return noSyntax()
+	}
+	return childAt(stmt, 0)
+}
+
+func parseBlock(p *Parser) SyntaxNode {
+	if !parseEnter(p) {
+		return noSyntax()
+	}
+	at := expect(p, "{")
+	var reversed List[SyntaxNode]
+	for p.reason == "" && p.current.kind != "}" && p.current.kind != "EOF" {
+		stmt := parseStatement(p)
+		reversed = prepend(stmt, reversed)
+		if stmt.kind != "EmptyStmt" {
+			statementEnd(p)
+		}
+	}
+	expect(p, "}")
+	p.depth--
+	return syntax("BlockStmt", at, "", syntaxOrder(reversed))
+}
+
+func parseStatement(p *Parser) SyntaxNode {
+	if !parseEnter(p) {
+		return noSyntax()
+	}
+	at := p.current
+	result := noSyntax()
+	switch at.kind {
+	case ";":
+		parseAdvance(p)
+		result = syntax("EmptyStmt", at, "", nil)
+	case "{":
+		result = parseBlock(p)
+	case "var", "const", "type":
+		result = syntax("DeclStmt", at, "", List[SyntaxNode]{parseDeclaration(p, true)})
+	case "if":
+		result = parseIf(p)
+	case "for":
+		result = parseFor(p)
+	case "switch":
+		result = parseSwitch(p)
+	case "return":
+		parseAdvance(p)
+		var values List[SyntaxNode]
+		if p.current.kind != ";" && p.current.kind != "}" && p.current.kind != "EOF" {
+			values = parseExpressionList(p, false)
+		}
+		result = syntax("ReturnStmt", at, "", values)
+	case "break", "continue", "fallthrough":
+		parseAdvance(p)
+		result = syntax("BranchStmt", at, at.kind, nil)
+	case "go", "defer", "goto", "select":
+		parseFail(p, "unsupported statement "+at.kind)
+	default:
+		result = parseSimple(p, false, false)
+	}
+	p.depth--
+	return result
+}
+
+func parseIf(p *Parser) SyntaxNode {
+	at := expect(p, "if")
+	init := noSyntax()
+	first := noSyntax()
+	if p.current.kind != ";" {
+		first = parseSimple(p, true, false)
+	}
+	cond := noSyntax()
+	if accept(p, ";") {
+		init = first
+		cond = parseExpression(p, 1, true)
+	} else {
+		cond = condition(p, first)
+	}
+	body := parseBlock(p)
+	other := noSyntax()
+	if accept(p, "else") {
+		if p.current.kind == "if" {
+			other = parseStatement(p)
+		} else {
+			other = parseBlock(p)
+		}
+	}
+	return syntax("IfStmt", at, "", List[SyntaxNode]{init, cond, body, other})
+}
+
+func parseFor(p *Parser) SyntaxNode {
+	at := expect(p, "for")
+	init := noSyntax()
+	cond := noSyntax()
+	post := noSyntax()
+	if p.current.kind != "{" {
+		first := noSyntax()
+		if p.current.kind != ";" {
+			first = parseSimple(p, true, true)
+		}
+		if first.kind == "RangeHeader" {
+			names := childAt(first, 0).children
+			key := noSyntax()
+			value := noSyntax()
+			if len(names) > 0 {
+				key = head(names).value
+			}
+			if len(names) > 1 {
+				value = head(tail(names)).value
+			}
+			body := parseBlock(p)
+			return syntax("RangeStmt", at, first.text, List[SyntaxNode]{key, value, childAt(first, 1), body})
+		}
+		if accept(p, ";") {
+			init = first
+			if p.current.kind != ";" {
+				cond = parseExpression(p, 1, true)
+			}
+			expect(p, ";")
+			if p.current.kind != "{" {
+				post = parseSimple(p, true, false)
+				if post.kind == "AssignStmt" && post.text == ":=" {
+					parseFail(p, "short declarations are not allowed in a for post statement")
+				}
+			}
+		} else {
+			cond = condition(p, first)
+		}
+	}
+	body := parseBlock(p)
+	return syntax("ForStmt", at, "", List[SyntaxNode]{init, cond, post, body})
+}
+
+func parseSwitch(p *Parser) SyntaxNode {
+	at := expect(p, "switch")
+	init := noSyntax()
+	tag := noSyntax()
+	if p.current.kind != "{" {
+		first := noSyntax()
+		if p.current.kind != ";" {
+			first = parseSimple(p, true, false)
+		}
+		if accept(p, ";") {
+			init = first
+			if p.current.kind != "{" {
+				tag = parseExpression(p, 1, true)
+			}
+		} else {
+			tag = condition(p, first)
+		}
+	}
+	opening := expect(p, "{")
+	var clauses List[SyntaxNode]
+	for p.reason == "" && p.current.kind != "}" && p.current.kind != "EOF" {
+		start := p.current
+		var values List[SyntaxNode]
+		if accept(p, "case") {
+			values = parseExpressionList(p, false)
+		} else {
+			expect(p, "default")
+		}
+		expect(p, ":")
+		var body List[SyntaxNode]
+		for p.reason == "" && p.current.kind != "case" && p.current.kind != "default" && p.current.kind != "}" && p.current.kind != "EOF" {
+			stmt := parseStatement(p)
+			body = prepend(stmt, body)
+			if stmt.kind != "EmptyStmt" {
+				statementEnd(p)
+			}
+		}
+		clauses = prepend(syntax("CaseClause", start, "", List[SyntaxNode]{syntax("Cases", start, "", values), syntax("Body", start, "", syntaxOrder(body))}), clauses)
+	}
+	expect(p, "}")
+	return syntax("SwitchStmt", at, "", List[SyntaxNode]{init, tag, syntax("BlockStmt", opening, "", syntaxOrder(clauses))})
+}

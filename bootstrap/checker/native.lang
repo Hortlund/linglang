@@ -1,0 +1,257 @@
+package main
+
+func nativeFunction(c *Checker, scope *TypeScope, name string, params List[int], result int) {
+	bindType(scope, name, "native", addType(c, CheckedType{kind: "func", name: name, params: params, result: result}))
+}
+
+func nativeTypes(c *Checker, scope *TypeScope) {
+	for _, name := range (List[string]{"Pid", "Monitor", "Supervisor"}) {
+		bindType(scope, name, "type", addType(c, CheckedType{kind: "handle", name: name}))
+	}
+	for _, name := range (List[string]{"List", "Map", "Delivery"}) {
+		bindType(scope, name, "generic", tInvalid)
+	}
+	// Native records use exactly the same struct checker as user declarations.
+	parsed := parse("<native>", "package main\ntype Process struct { pid Pid; monitor Monitor }; type ChildOptions struct { restart string; shutdownMillis int }; type Child struct { pid Pid; ok bool; reason string }; type Exit struct { pid Pid; ok bool; normal bool; reason string }; type TextResult struct { value string; ok bool; reason string }; type IntResult struct { value int; ok bool; reason string }; type IOResult struct { ok bool; reason string }; type RuneResult struct { value int; width int; ok bool }")
+	assert(parsed.ok)
+	registerTypes(c, scope, tail(parsed.root.children))
+	completeTypes(c, scope, tail(parsed.root.children))
+}
+
+func nativeFunctions(c *Checker, scope *TypeScope) {
+	pid := typedName(scope, "Pid").value.typeID
+	monitorType := typedName(scope, "Monitor").value.typeID
+	supervisor := typedName(scope, "Supervisor").value.typeID
+	child := typedName(scope, "Child").value.typeID
+	nativeFunction(c, scope, "self", List[int]{}, pid)
+	nativeFunction(c, scope, "monitor", List[int]{pid}, monitorType)
+	nativeFunction(c, scope, "wait", List[int]{monitorType, tInt}, typedName(scope, "Exit").value.typeID)
+	nativeFunction(c, scope, "demonitor", List[int]{monitorType}, tBool)
+	nativeFunction(c, scope, "startSupervisor", List[int]{tInt, tInt}, supervisor)
+	nativeFunction(c, scope, "supervisorPid", List[int]{supervisor}, pid)
+	for _, name := range (List[string]{"lookupChild", "restartChild"}) {
+		nativeFunction(c, scope, name, List[int]{supervisor, tString}, child)
+	}
+	for _, name := range (List[string]{"stopChild", "removeChild"}) {
+		nativeFunction(c, scope, name, List[int]{supervisor, tString}, tBool)
+	}
+	nativeFunction(c, scope, "stopSupervisor", List[int]{supervisor}, tBool)
+	nativeFunction(c, scope, "readFile", List[int]{tString}, typedName(scope, "TextResult").value.typeID)
+	nativeFunction(c, scope, "writeFile", List[int]{tString, tString}, typedName(scope, "IOResult").value.typeID)
+	nativeFunction(c, scope, "split", List[int]{tString, tString}, compoundType(c, "list", 0, tString))
+	nativeFunction(c, scope, "trim", List[int]{tString}, tString)
+	nativeFunction(c, scope, "parseInt", List[int]{tString}, typedName(scope, "IntResult").value.typeID)
+	nativeFunction(c, scope, "formatInt", List[int]{tInt}, tString)
+	nativeFunction(c, scope, "args", List[int]{}, compoundType(c, "list", 0, tString))
+	nativeFunction(c, scope, "assert", List[int]{tBool}, tVoid)
+	nativeFunction(c, scope, "byteAt", List[int]{tString, tInt}, tInt)
+	nativeFunction(c, scope, "slice", List[int]{tString, tInt, tInt}, tString)
+	nativeFunction(c, scope, "join", List[int]{compoundType(c, "list", 0, tString), tString}, tString)
+	nativeFunction(c, scope, "runeAt", List[int]{tString, tInt}, typedName(scope, "RuneResult").value.typeID)
+	for _, name := range (List[string]{"isLetter", "isDigit"}) {
+		nativeFunction(c, scope, name, List[int]{tInt}, tBool)
+	}
+	for _, name := range (List[string]{"prepend", "head", "tail", "get", "put", "remove", "receive", "send", "spawn", "spawnMonitor", "supervise"}) {
+		bindType(scope, name, "intrinsic", tInvalid)
+	}
+	for _, name := range (List[string]{"len", "append", "make", "new", "panic", "print", "println"}) {
+		bindType(scope, name, "intrinsic", tInvalid)
+	}
+	bindType(scope, "true", "const", tUntypedBool)
+	bindType(scope, "false", "const", tUntypedBool)
+	bindType(scope, "nil", "const", tNil)
+	bindType(scope, "iota", "iota", tUntypedInt)
+}
+
+func requireArity(c *Checker, node SyntaxNode, values List[CheckedValue], count int) {
+	if len(values) != count {
+		checkFail(c, node.at, "wrong number of arguments")
+	}
+}
+
+func valueAt(values List[CheckedValue], index int) CheckedValue {
+	for index > 0 {
+		values = tail(values)
+		index--
+	}
+	return head(values).value
+}
+
+// Inference defaults literal types but requires a concrete value type. Nil and
+// no-result calls cannot determine an unconstrained generic parameter.
+func inferredValueType(value CheckedValue) int {
+	if value.kind != "value" || value.typeID == tNil || value.typeID == tVoid {
+		return tInvalid
+	}
+	return defaultType(value.typeID)
+}
+
+func nativeCall(c *Checker, scope *TypeScope, node SyntaxNode, name string, explicit List[int], values List[CheckedValue]) int {
+	if name == "new" || name == "make" {
+		value := valueAt(values, 0)
+		if value.kind != "type" {
+			checkFail(c, node.at, "expected a type argument")
+		}
+		if name == "new" {
+			requireArity(c, node, values, 1)
+			return compoundType(c, "pointer", 0, value.typeID)
+		}
+		kind := checkedType(c, value.typeID).kind
+		if kind != "list" && kind != "map" {
+			checkFail(c, node.at, "make requires List or Map")
+		}
+		count := len(values)
+		if (kind == "list" && (count < 2 || count > 3)) || (kind == "map" && (count < 1 || count > 2)) {
+			checkFail(c, node.at, "wrong number of make arguments")
+		}
+		for _, size := range tail(values) {
+			requireType(c, node, size, tInt)
+		}
+		return value.typeID
+	}
+	if name == "print" || name == "println" || name == "panic" {
+		if name == "panic" {
+			requireArity(c, node, values, 1)
+		}
+		for _, value := range values {
+			if value.kind != "value" || value.typeID == tVoid || (name != "panic" && value.typeID == tNil) {
+				checkFail(c, node.at, "expected a value argument")
+			}
+		}
+		return tVoid
+	}
+	if name == "len" {
+		requireArity(c, node, values, 1)
+		value := valueAt(values, 0)
+		kind := checkedType(c, value.typeID).kind
+		if value.kind != "value" || (defaultType(value.typeID) != tString && kind != "list" && kind != "map") {
+			checkFail(c, node.at, "len requires string, List, or Map")
+		}
+		return tInt
+	}
+	if name == "receive" {
+		requireArity(c, node, values, 1)
+		if len(explicit) != 1 {
+			checkFail(c, node.at, "receive requires one explicit type")
+		}
+		requireType(c, node, valueAt(values, 0), tInt)
+		return compoundType(c, "delivery", 0, head(explicit).value)
+	}
+	if name == "send" {
+		requireArity(c, node, values, 2)
+		requireType(c, node, valueAt(values, 0), typedName(c.native, "Pid").value.typeID)
+		value := valueAt(values, 1)
+		if value.kind != "value" || (value.typeID == tNil && !head(explicit).ok) || value.typeID == tVoid {
+			checkFail(c, node.at, "send requires a value")
+		}
+		if head(explicit).ok {
+			requireType(c, node, value, head(explicit).value)
+		}
+		return tVoid
+	}
+	if name == "spawn" || name == "spawnMonitor" || name == "supervise" {
+		index := 0
+		count := 2
+		if name == "supervise" {
+			index = 2
+			count = 5
+			requireType(c, node, valueAt(values, 0), typedName(c.native, "Supervisor").value.typeID)
+			requireType(c, node, valueAt(values, 1), tString)
+			requireType(c, node, valueAt(values, 4), typedName(c.native, "ChildOptions").value.typeID)
+		}
+		requireArity(c, node, values, count)
+		worker := checkedType(c, valueAt(values, index).typeID)
+		if worker.kind != "func" || len(worker.params) != 1 || worker.result != tVoid || valueAt(values, index).kind != "func" {
+			checkFail(c, node.at, "worker must take one argument and return nothing")
+		}
+		requireType(c, node, valueAt(values, index+1), head(worker.params).value)
+		if head(explicit).ok && head(explicit).value != head(worker.params).value {
+			checkFail(c, node.at, "worker type argument mismatch")
+		}
+		result := "Pid"
+		if name == "spawnMonitor" {
+			result = "Process"
+		}
+		if name == "supervise" {
+			result = "Child"
+		}
+		return typedName(c.native, result).value.typeID
+	}
+	index := 0
+	if name == "prepend" {
+		index = 1
+	}
+	collection := valueAt(values, index)
+	isMap := name == "get" || name == "put" || name == "remove"
+	if collection.kind == "value" && collection.typeID == tNil {
+		key := tInvalid
+		elem := tInvalid
+		if isMap {
+			if head(explicit).ok {
+				key = head(explicit).value
+			} else if name == "put" {
+				key = inferredValueType(valueAt(values, 1))
+			}
+			if head(tail(explicit)).ok {
+				elem = head(tail(explicit)).value
+			} else if name == "put" {
+				elem = inferredValueType(valueAt(values, 2))
+			}
+			collection = expressionValue(compoundType(c, "map", key, elem))
+		} else if name == "prepend" || head(explicit).ok {
+			if head(explicit).ok {
+				elem = head(explicit).value
+			} else {
+				elem = inferredValueType(valueAt(values, 0))
+			}
+			collection = expressionValue(compoundType(c, "list", 0, elem))
+		}
+		if elem == tInvalid || (isMap && key == tInvalid) {
+			checkFail(c, node.at, "cannot infer collection type arguments")
+		}
+	}
+	t := checkedType(c, collection.typeID)
+	if collection.kind != "value" {
+		checkFail(c, node.at, "expected a collection value")
+	}
+	if (isMap && t.kind != "map") || (!isMap && t.kind != "list") {
+		checkFail(c, node.at, "wrong collection type")
+	}
+	if isMap && t.key != tInt && t.key != tString {
+		checkFail(c, node.at, "Map keys must be int or string")
+	}
+	if head(explicit).ok {
+		if (!isMap && (len(explicit) != 1 || head(explicit).value != t.elem)) || (isMap && (len(explicit) > 2 || head(explicit).value != t.key || (head(tail(explicit)).ok && head(tail(explicit)).value != t.elem))) {
+			checkFail(c, node.at, "collection type argument mismatch")
+		}
+	}
+	switch name {
+	case "head", "tail":
+		requireArity(c, node, values, 1)
+	case "prepend":
+		requireArity(c, node, values, 2)
+		requireType(c, node, valueAt(values, 0), t.elem)
+	case "get", "remove":
+		requireArity(c, node, values, 2)
+		requireType(c, node, valueAt(values, 1), t.key)
+	case "put":
+		requireArity(c, node, values, 3)
+		requireType(c, node, valueAt(values, 1), t.key)
+		requireType(c, node, valueAt(values, 2), t.elem)
+	case "append":
+		if len(values) < 1 {
+			checkFail(c, node.at, "append requires a List")
+		}
+		for _, value := range tail(values) {
+			if node.text == "..." {
+				requireType(c, node, value, collection.typeID)
+			} else {
+				requireType(c, node, value, t.elem)
+			}
+		}
+	}
+	if name == "head" || name == "get" {
+		return compoundType(c, "delivery", 0, t.elem)
+	}
+	return collection.typeID
+}

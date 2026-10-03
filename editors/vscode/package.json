@@ -1,0 +1,77 @@
+{
+  "name": "linglang",
+  "displayName": "Linglang",
+  "description": "Language support for Linglang: the bean has an editor now.",
+  "version": "0.1.0",
+  "publisher": "linglang",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "linglang",
+        "aliases": [
+          "Linglang",
+          "linglang"
+        ],
+        "extensions": [
+          ".lang"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "linglang",
+        "scopeName": "source.linglang",
+        "path": "./syntaxes/linglang.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "linglang",
+        "path": "./snippets/linglang.json"
+      }
+    ],
+    "configuration": {
+      "title": "Linglang",
+      "properties": {
+        "linglang.serverPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "description": "Path to the Linglang executable. Empty uses the bundled server, then linglang on PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "package": "node scripts/package.js",
+    "test:editor": "node scripts/test-editor.js"
+  },
+  "dependencies": {
+    "vscode-languageclient": "9.0.1"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "0.28.2",
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.3.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hortlund/linglang.git"
+  }
+}

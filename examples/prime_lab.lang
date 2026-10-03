@@ -2,6 +2,7 @@ package main
 
 // Run from the repository root:
 // go run ./cmd/linglang run examples/prime_lab.lang examples/prime_jobs.txt prime-results.csv
+// The same program split across files lives in examples/prime_lab/.
 const (
     Enqueue = iota + 1
     WorkerReady

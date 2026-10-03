@@ -1,0 +1,24 @@
+package main
+
+func main() {
+	if !head(args()).ok {
+		panic("usage: checker <source.lang> [source.lang...]")
+	}
+	var reversed List[SyntaxNode]
+	for _, filename := range args() {
+		input := readFile(filename)
+		if !input.ok {
+			panic("cannot read " + filename + ": " + input.reason)
+		}
+		parsed := parse(filename, input.value)
+		if !parsed.ok {
+			panic(filename + ":" + formatInt(parsed.line) + ":" + formatInt(parsed.column) + ": " + parsed.reason)
+		}
+		reversed = prepend(parsed.root, reversed)
+	}
+	result := checkPackage(syntaxOrder(reversed))
+	if !result.ok {
+		panic(result.at.filename + ":" + formatInt(result.at.line) + ":" + formatInt(result.at.column) + ": " + result.reason)
+	}
+	println("types ok")
+}

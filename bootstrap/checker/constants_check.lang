@@ -1,0 +1,69 @@
+package main
+
+func constantKey(name SyntaxNode) string {
+	if name.text == "_" {
+		return quotedText(name.at.filename) + ":" + formatInt(name.at.offset)
+	}
+	return name.text
+}
+
+func registerConstants(c *Checker, scope *TypeScope, declarations List[SyntaxNode]) {
+	for _, declaration := range declarations {
+		if declaration.kind == "GenDecl" && declaration.text == "const" {
+			previous := noSyntax()
+			for _, spec := range declaration.children {
+				initializer := spec
+				if len(childAt(spec, 2).children) == 0 {
+					initializer = previous
+				} else {
+					previous = spec
+				}
+				values := childAt(initializer, 2).children
+				if len(values) != len(childAt(spec, 0).children) {
+					checkFail(c, spec.at, "constant value count mismatch")
+				}
+				for _, name := range childAt(spec, 0).children {
+					c.constants = put(c.constants, constantKey(name), PendingConstant{name: name.text, value: head(values).value, declared: childAt(initializer, 1), at: name.at})
+					bindType(scope, name.text, "pending", tInvalid)
+					values = tail(values)
+				}
+			}
+		}
+	}
+}
+
+func checkConstant(c *Checker, name string) {
+	if c.reason != "" {
+		return
+	}
+	state := get(c.constantState, name).value
+	constant := get(c.constants, name).value
+	if state == 2 {
+		return
+	}
+	if state == 1 {
+		checkFail(c, constant.at, "constant dependency cycle")
+		return
+	}
+	c.constantState = put(c.constantState, name, 1)
+	id := tInvalid
+	if constant.declared.kind != "nil" {
+		id = typeSyntax(c, c.global, constant.declared)
+	}
+	c.constantDepth++
+	value := checkExpression(c, c.global, constant.value, id)
+	c.constantDepth--
+	if id != tInvalid {
+		requireType(c, constant.value, value, id)
+	} else {
+		id = value.typeID
+		if value.kind != "value" || id == tNil || id == tVoid {
+			checkFail(c, constant.at, "constant requires a typed value")
+		}
+	}
+	if defaultType(id) != tInt && defaultType(id) != tBool && defaultType(id) != tString {
+		checkFail(c, constant.at, "constant requires int, bool, or string")
+	}
+	bindType(c.global, constant.name, "const", id)
+	c.constantState = put(c.constantState, name, 2)
+}

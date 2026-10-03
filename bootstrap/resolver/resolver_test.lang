@@ -1,0 +1,87 @@
+package main
+
+func resolveSource(source string) ResolveResult {
+	parsed := parse("test.lang", source)
+	assert(parsed.ok)
+	return resolve(List[SyntaxNode]{parsed.root})
+}
+
+func offsetOf(source string, text string) int {
+	return len(head(split(source, text)).value)
+}
+
+func referenceAt(result ResolveResult, offset int) Reference {
+	for _, reference := range result.references {
+		if reference.at.offset == offset {
+			return reference
+		}
+	}
+	assert(false)
+	return Reference{}
+}
+
+func TestLexicalBindingsAndInitializers() {
+	source := "package main\nfunc f(x int){println(x);{x:=x+1;println(x)};println(x)}"
+	result := resolveSource(source)
+	assert(result.ok)
+	param := offsetOf(source, "x int")
+	inner := offsetOf(source, "x:=")
+	assert(referenceAt(result, offsetOf(source, "x+1")).symbol.at.offset == param)
+	assert(referenceAt(result, offsetOf(source, "println(x)}")+len("println(")).symbol.at.offset == inner)
+	assert(referenceAt(result, offsetOf(source, "};println(x)")+len("};println(")).symbol.at.offset == param)
+	result = resolveSource("package main\nfunc f(int int,x int){println(int,x)}")
+	assert(result.ok)
+	for _, reference := range result.references {
+		if reference.at.offset < len("package main\nfunc f(int int,x int)") && reference.symbol.name == "int" {
+			assert(reference.symbol.kind == "builtin")
+		}
+	}
+	assert(resolveSource("package main\nfunc f(){x:=1;{var x=x+1;println(x)};println(x)}").ok)
+	assert(resolveSource("package main\nfunc f(){x:=1;x,y:=x,2;println(x,y)}").ok)
+}
+
+func TestPackageForwardReferencesAndRecursion() {
+	first := parse("first.lang", "package main\nfunc main(){println(answer(),Node{})}")
+	second := parse("second.lang", "package main\ntype Node struct{next *Node}; const N=42; func answer()int{return N}")
+	assert(first.ok && second.ok)
+	result := resolve(List[SyntaxNode]{first.root, second.root})
+	assert(result.ok)
+	for _, reference := range result.references {
+		if reference.at.filename == "first.lang" && reference.symbol.name == "answer" {
+			assert(reference.symbol.at.filename == "second.lang" && reference.symbol.kind == "func")
+		}
+	}
+	assert(resolveSource("package main\nfunc f(n int)int{if n==0{return 1};return f(n-1)}").ok)
+	assert(!resolve(List[SyntaxNode]{first.root, first.root}).ok)
+	assert(!resolve(nil).ok)
+}
+
+func TestLoopConditionalAndCaseScopes() {
+	source := "package main\nfunc f(){xs:=List[int]{1};for i,x:=range xs{println(i,x)};if x:=1;x>0{println(x)}else{println(x)};switch n:=1;n{case 1:x:=1;println(x);case 2:x:=2;println(x)}}"
+	assert(resolveSource(source).ok)
+	assert(resolveSource("package main\nfunc f(){x:=0;for x=range (List[int]{1}){println(x)};for i:=0;i<3;i++{println(i)};println(x)}").ok)
+	for _, source := range (List[string]{"package main\nfunc f(){if x:=1;x>0{};println(x)}", "package main\nfunc f(){for x:=range xs{println(x)}}", "package main\nfunc f(){for x:=range (List[int]{1}){};println(x)}", "package main\nfunc f(){switch{case true:x:=1;println(x);case false:println(x)}}", "package main\nfunc f(){for _:=range (List[int]{1}){}}"}) {
+		assert(!resolveSource(source).ok)
+	}
+}
+
+func TestNameErrorsAndDeferredMembers() {
+	for _, source := range (List[string]{"package main\nfunc f(){println(missing)}", "package main\nfunc f(){x:=x}", "package main\nfunc f(){x:=1;x:=2}", "package main\nfunc f(){x,x:=1,2}", "package main\nfunc f(){_:=1}", "package main\nfunc f(x int){var x int}", "package main\nfunc f(){var x int;var x int}", "package main\nfunc f(){};func f(){}", "package main\nfunc readFile(){}"}) {
+		result := resolveSource(source)
+		assert(!result.ok && result.reason != "" && result.at.filename == "test.lang" && result.at.line > 0 && result.at.column > 0)
+	}
+	result := resolveSource("package main\ntype N struct{x int};func f(){n:=N{x:1};println(n.missing,Map[string,int]{key:1})}")
+	assert(result.ok && len(result.deferred) == 3)
+	result = resolveSource("package main\nfunc f(){println(missing)}")
+	assert(result.at.offset == len("package main\nfunc f(){println("))
+}
+
+func TestLongOperatorTreesAndLocalTypes() {
+	expression := "n"
+	for i := 0; i < 128; i++ {
+		expression += "+n"
+	}
+	result := resolveSource("package main\nfunc f(n int){println(" + expression + ")}")
+	assert(result.ok && len(result.references) == 131)
+	assert(resolveSource("package main\nfunc f(){type N struct{next *N};println(N{})}").ok)
+}

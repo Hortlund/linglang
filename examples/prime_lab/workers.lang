@@ -1,0 +1,25 @@
+package main
+
+func isPrime(n int) bool {
+    if n < 2 { return false }
+    for divisor := 2; divisor * divisor <= n; divisor++ {
+        if n % divisor == 0 { return false }
+    }
+    return true
+}
+
+func worker(args WorkerArgs) {
+    send(args.queue, Command{kind: WorkerReady, slot: args.slot, worker: self()})
+    for {
+        work := receive[Work](-1).value
+        if work.crash { panic("prime lab: deliberate worker crash; OTP will restart me") }
+        result := Result{id: work.job.id, limit: work.job.limit}
+        for n := 2; n <= work.job.limit; n++ {
+            if isPrime(n) { result.count++; result.largest = n }
+        }
+        done := Command{kind: JobFinished, slot: args.slot, worker: self(), result: result}
+        send(args.queue, done)
+        // Exercise duplicate delivery: only the current assignment may be acknowledged.
+        send(args.queue, done)
+    }
+}

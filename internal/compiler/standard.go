@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"go/ast"
+	"strconv"
 	"strings"
 )
 
@@ -10,6 +11,7 @@ const standardPrelude = `
 type TextResult struct { value string; ok bool; reason string }
 type IntResult struct { value int; ok bool; reason string }
 type IOResult struct { ok bool; reason string }
+type RuneResult struct { value int; width int; ok bool }
 func readFile(path string) TextResult { return TextResult{} }
 func writeFile(path string, text string) IOResult { return IOResult{} }
 func split(text string, separator string) List[string] { return nil }
@@ -17,6 +19,13 @@ func trim(text string) string { return "" }
 func parseInt(text string) IntResult { return IntResult{} }
 func formatInt(value int) string { return "" }
 func args() List[string] { return nil }
+func assert(condition bool) {}
+func byteAt(text string, index int) int { return 0 }
+func slice(text string, start int, end int) string { return "" }
+func join(parts List[string], separator string) string { return "" }
+func runeAt(text string, offset int) RuneResult { return RuneResult{} }
+func isLetter(value int) bool { return false }
+func isDigit(value int) bool { return false }
 `
 
 func (c *compiler) standardCall(call *ast.CallExpr) (string, bool, error) {
@@ -24,10 +33,22 @@ func (c *compiler) standardCall(call *ast.CallExpr) (string, bool, error) {
 	if id == nil {
 		return "", false, nil
 	}
+	if c.intrinsics[c.info.Uses[id]] == "assert" {
+		condition, err := c.expression(call.Args[0])
+		if err != nil {
+			return "", true, err
+		}
+		position := c.fset.Position(call.Pos())
+		return c.ordered([]string{condition}, func(v []string) string {
+			return "linglang_rt:assert_value(" + v[0] + ", " + binaryString(position.Filename) + ", " + strconv.Itoa(position.Line) + ")"
+		}), true, nil
+	}
 	operation := map[string]string{
 		"readFile": "read_file", "writeFile": "write_file",
 		"split": "text_split", "trim": "text_trim",
 		"parseInt": "parse_int", "formatInt": "format_int", "args": "arguments",
+		"byteAt": "text_byte", "slice": "text_slice", "join": "text_join",
+		"runeAt": "text_rune", "isLetter": "unicode_letter", "isDigit": "unicode_digit",
 	}[c.intrinsics[c.info.Uses[id]]]
 	if operation == "" {
 		return "", false, nil

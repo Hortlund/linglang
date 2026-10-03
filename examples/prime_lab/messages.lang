@@ -1,0 +1,17 @@
+package main
+
+const (
+    Enqueue = iota + 1
+    WorkerReady
+    JobFinished
+)
+const WorkerCount = 3
+
+type Job struct { id int; limit int }
+type Result struct { id int; limit int; count int; largest int }
+type Command struct { kind int; jobs List[Job]; slot int; worker Pid; result Result }
+type Work struct { job Job; crash bool }
+type Summary struct { results List[Result]; restarts int; peak int }
+type WorkerArgs struct { queue Pid; slot int }
+type QueueArgs struct { parent Pid; workers int; crash bool }
+type WorkerState struct { pid Pid; job int }

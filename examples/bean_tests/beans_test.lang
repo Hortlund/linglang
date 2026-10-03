@@ -1,0 +1,18 @@
+package main
+
+func TestBeanMath() {
+	assert(moreBeans(1) == 2)
+}
+
+func TestBeanGetsBackUp() {
+	supervisor := startSupervisor(3, 5)
+	child := supervise(supervisor, "bean", beanWorker, self(), ChildOptions{})
+	assert(child.ok)
+	first := receive[Ready](5000)
+	assert(first.ok)
+	send(first.value.pid, 1)
+	replacement := receive[Ready](5000)
+	assert(replacement.ok)
+	assert(replacement.value.pid != first.value.pid)
+	assert(stopSupervisor(supervisor))
+}
