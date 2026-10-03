@@ -1,5 +1,11 @@
 package main
 
+const (
+    CommandCrash = "crash"
+    CommandAdd = "add"
+    CommandGet = "get"
+)
+
 type CounterArgs struct { parent Pid; initial int }
 type Started struct { pid Pid }
 type Command struct { kind string; amount int; reply Pid }
@@ -11,8 +17,12 @@ func counter(args CounterArgs) {
     for {
         delivery := receive[Command](-1)
         cmd := delivery.value
-        if cmd.kind == "crash" { panic("demonstration crash") }
-        if cmd.kind == "add" { total += cmd.amount }
+        switch cmd.kind {
+        case CommandCrash:
+            panic("demonstration crash")
+        case CommandAdd:
+            total += cmd.amount
+        }
         send(cmd.reply, total)
     }
 }
@@ -37,10 +47,10 @@ func main() {
         CounterArgs{parent: self(), initial: 10}, ChildOptions{restart: "permanent"})
     if !child.ok { panic(child.reason) }
     first := ready()
-    println("Before crash:", readCounter(first, "add", 5))
+    println("Before crash:", readCounter(first, CommandAdd, 5))
 
     failure := monitor(first)
-    send(first, Command{kind: "crash"})
+    send(first, Command{kind: CommandCrash})
     exited := wait(failure, 5000)
     if !exited.ok { panic("crash was not observed") }
     replacement := ready()
@@ -48,7 +58,7 @@ func main() {
     if !current.ok || current.pid != replacement { panic("replacement lookup failed") }
     println("Restarted with new PID:", replacement != first)
     // Restart uses the original argument snapshot. In-memory state is not durable.
-    println("After restart:", readCounter(current.pid, "get", 0))
+    println("After restart:", readCounter(current.pid, CommandGet, 0))
 
     workerExit := monitor(current.pid)
     println("Supervisor stopped:", stopSupervisor(supervisor))

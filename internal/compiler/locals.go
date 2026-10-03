@@ -120,18 +120,30 @@ func (c *compiler) optimizedFunction(fn *ast.FuncDecl) (string, error) {
 }
 
 func containsReferences(t types.Type) bool {
+	return containsReferencesSeen(t, map[types.Type]bool{})
+}
+
+func containsReferencesSeen(t types.Type, seen map[types.Type]bool) bool {
 	if t == nil {
 		return false
 	}
+	if seen[t] {
+		return false
+	}
+	seen[t] = true
 	switch t := t.Underlying().(type) {
 	case *types.Pointer:
 		return true
 	case *types.Struct:
 		for i := 0; i < t.NumFields(); i++ {
-			if containsReferences(t.Field(i).Type()) {
+			if containsReferencesSeen(t.Field(i).Type(), seen) {
 				return true
 			}
 		}
+	case *types.Slice:
+		return containsReferencesSeen(t.Elem(), seen)
+	case *types.Map:
+		return containsReferencesSeen(t.Key(), seen) || containsReferencesSeen(t.Elem(), seen)
 	}
 	return false
 }
@@ -176,6 +188,15 @@ func (g *localLowering) statement(stmt ast.Stmt, next, stop, again *flowBlock) *
 	switch s := stmt.(type) {
 	case *ast.BlockStmt:
 		return g.sequence(s.List, next, stop, again)
+	case *ast.DeclStmt:
+		if s.Decl.(*ast.GenDecl).Tok == token.CONST {
+			return next
+		}
+		b := g.block()
+		b.stmt, b.next = stmt, next
+		return b
+	case *ast.SwitchStmt:
+		return g.switchFlow(s, next, again)
 	case *ast.IfStmt:
 		b := g.block()
 		b.cond = s.Cond

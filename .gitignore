@@ -3,6 +3,7 @@
 *.beam
 erl_crash.dump
 .DS_Store
+/prime-results.csv
 
 # Local AI-generated documentation, handoffs, and reports
 /docs/

@@ -1,0 +1,6 @@
+# Count primes up to each limit. Spaces and inline comments are fine.
+100
+1000
+10000 # a slightly bigger job
+
+not-a-number # demonstrate validation without losing the other jobs

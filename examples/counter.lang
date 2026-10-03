@@ -1,5 +1,11 @@
 package main
 
+const (
+    CommandAdd = iota + 1
+    CommandDone
+    CommandRead
+)
+
 type CounterArgs struct { workers int }
 type WorkerArgs struct { counter Pid; increments int }
 type Command struct { kind int; amount int; reply Pid }
@@ -14,9 +20,14 @@ func counter(args CounterArgs) {
     for {
         delivery := receive[Command](-1)
         cmd := delivery.value
-        if cmd.kind == 1 { total += cmd.amount }
-        if cmd.kind == 2 { finished++ }
-        if cmd.kind == 3 { reader = cmd.reply }
+        switch cmd.kind {
+        case CommandAdd:
+            total += cmd.amount
+        case CommandDone:
+            finished++
+        case CommandRead:
+            reader = cmd.reply
+        }
         if finished == args.workers && reader != nil {
             send(reader, Snapshot{total: total})
             return
@@ -26,9 +37,9 @@ func counter(args CounterArgs) {
 
 func worker(args WorkerArgs) {
     for i := 0; i < args.increments; i++ {
-        send(args.counter, Command{kind: 1, amount: 1})
+        send(args.counter, Command{kind: CommandAdd, amount: 1})
     }
-    send(args.counter, Command{kind: 2})
+    send(args.counter, Command{kind: CommandDone})
 }
 
 func awaitNormal(process Process) {
@@ -46,7 +57,7 @@ func main() {
 
     // This request may arrive before the workers finish. The service replies
     // when all four Done messages have arrived.
-    send(service.pid, Command{kind: 3, reply: self()})
+    send(service.pid, Command{kind: CommandRead, reply: self()})
     result := receive[Snapshot](5000)
     if !result.ok { panic("counter response timed out") }
     println("Counter:", result.value.total)

@@ -2,6 +2,11 @@
 -module(linglang_rt).
 -export([new/1, read/1, write/2, field/2, field_value/2, deref/1,
          binary/3, print/2, loop/4, loop_cell/5,
+         list_length/1, list_append/2, list_prepend/2, list_head/2,
+         list_tail/1, list_first/1, list_more/1,
+         map_length/1, map_get/3, map_put/3, map_remove/2,
+         read_file/1, write_file/2, text_split/2, text_trim/1,
+         parse_int/1, format_int/1, arguments/0,
          scope/1, keep/1, roots/1, safepoint/0, collect/0, stats/0, set_gc_stress/1,
          spawn_process/4, send_message/3, receive_message/3,
          monitor_process/1, wait_process/2, demonitor_process/1,
@@ -38,6 +43,13 @@ valid_message(int, Value) ->
 valid_message(bool, Value) -> is_boolean(Value);
 valid_message(string, Value) -> is_binary(Value);
 valid_message(pid, Value) -> is_pid(Value) orelse Value =:= nil;
+valid_message({list, _}, nil) -> true;
+valid_message({list, Element}, Value) -> valid_list(Element, Value);
+valid_message({map, _, _}, nil) -> true;
+valid_message({map, KeyShape, ValueShape}, Value) when is_map(Value) ->
+    maps:fold(fun(Key, Item, Valid) ->
+        Valid andalso valid_message(KeyShape, Key) andalso valid_message(ValueShape, Item)
+    end, true, Value);
 valid_message({named, Name, Shape}, Value) when is_binary(Name) -> valid_message(Shape, Value);
 valid_message({struct, Fields}, Value) when is_map(Value), is_list(Fields) ->
     map_size(Value) =:= length(Fields) andalso
@@ -48,6 +60,11 @@ valid_message({struct, Fields}, Value) when is_map(Value), is_list(Fields) ->
         end
     end, Fields);
 valid_message(_, _) -> false.
+
+valid_list(_, []) -> true;
+valid_list(Element, [Value | Rest]) ->
+    valid_message(Element, Value) andalso valid_list(Element, Rest);
+valid_list(_, _) -> false.
 
 timeout(-1) -> infinity;
 timeout(Milliseconds) when is_integer(Milliseconds), Milliseconds >= 0,
@@ -128,7 +145,7 @@ exit_reason(Reason) -> iolist_to_binary(io_lib:format("~tp", [Reason])).
 %% Neither scope exit nor allocation may collect: a returned value can be between
 %% frames until the caller immediately stores or roots it.
 scope(Fun) ->
-    put({linglang_gc, frames}, [#{} | state(frames, [])]),
+    put({linglang_gc, frames}, [[] | state(frames, [])]),
     try Fun()
     after
         [_ | Rest] = state(frames, []),
@@ -136,25 +153,25 @@ scope(Fun) ->
     end.
 
 keep(Value) ->
-    case references(Value, []) of
-        [] -> ok;
-        Ids ->
-            case state(frames, []) of
-                [Top | Rest] ->
-                    Roots = lists:foldl(fun(Id, Acc) -> Acc#{Id => true} end, Top, Ids),
-                    put({linglang_gc, frames}, [Roots | Rest]);
-                [] -> erlang:error(linglang_missing_root_scope)
+    case state(frames, []) of
+        [Top | Rest] ->
+            put({linglang_gc, frames}, [[Value | Top] | Rest]);
+        [] ->
+            case references(Value, []) of
+                [] -> ok;
+                _ -> erlang:error(linglang_missing_root_scope)
             end
     end,
     Value.
 
 %% Optimized functions replace their root snapshot at block boundaries. Values
 %% are rooted before collection; expression scopes protect suspended operands.
+%% Retain values without traversing them: scanning every remaining list tail at
+%% each block would turn a linear range loop into quadratic work. Managed pointer
+%% discovery is deferred until collection (or an explicit statistics request).
 roots(Values) ->
     [ _ | Rest ] = state(frames, []),
-    Ids = lists:foldl(fun references/2, [], Values),
-    Top = maps:from_keys(Ids, true),
-    put({linglang_gc, frames}, [Top | Rest]),
+    put({linglang_gc, frames}, [Values | Rest]),
     ok.
 
 new(Value) ->
@@ -178,7 +195,8 @@ safepoint() ->
     end.
 
 collect() ->
-    Roots = lists:foldl(fun maps:merge/2, #{}, state(frames, [])),
+    Roots = lists:foldl(fun(Frame, Acc) -> maps:merge(root_ids(Frame), Acc) end,
+                        #{}, state(frames, [])),
     Marked = mark(maps:keys(Roots), #{}),
     {Alive, Freed} = lists:foldl(fun(Id, {Acc, Count}) ->
         case is_map_key(Id, Marked) of
@@ -212,7 +230,110 @@ mark([Id | Rest], Seen) ->
 references({linglang_ptr, Owner, Id, _}, Acc) when Owner =:= self() -> [Id | Acc];
 references(Value, Acc) when is_map(Value) ->
     maps:fold(fun(_, Field, Refs) -> references(Field, Refs) end, Acc, Value);
+references([Head | Tail], Acc) -> references(Tail, references(Head, Acc));
 references(_, Acc) -> Acc.
+
+root_ids(Values) ->
+    maps:from_keys(lists:foldl(fun references/2, [], Values), true).
+
+%% List[T] values are native immutable BEAM lists. The nil zero value is kept
+%% distinct from an empty literal, but both behave as empty in list operations.
+list_items(nil) -> [];
+list_items(Items) when is_list(Items) -> Items.
+
+list_length(Items) -> length(list_items(Items)).
+list_append(Items, More) ->
+    case list_items(More) of
+        [] -> Items;
+        Values -> list_items(Items) ++ Values
+    end.
+list_prepend(Value, Items) -> [Value | list_items(Items)].
+list_head(Items, Zero) ->
+    case list_items(Items) of
+        [] -> #{field_76616c7565 => Zero, field_6f6b => false};
+        [Value | _] -> #{field_76616c7565 => Value, field_6f6b => true}
+    end.
+list_tail(nil) -> nil;
+list_tail([]) -> [];
+list_tail([_ | Rest]) -> Rest.
+list_first([Value | _]) -> Value.
+list_more(nil) -> false;
+list_more([]) -> false;
+list_more([_ | _]) -> true.
+
+map_items(nil) -> #{};
+map_items(Items) when is_map(Items) -> Items.
+map_length(Items) -> map_size(map_items(Items)).
+map_get(Items, Key, Zero) ->
+    case maps:find(Key, map_items(Items)) of
+        {ok, Value} -> #{field_76616c7565 => Value, field_6f6b => true};
+        error -> #{field_76616c7565 => Zero, field_6f6b => false}
+    end.
+map_put(Items, Key, Value) -> (map_items(Items))#{Key => Value}.
+map_remove(nil, _) -> nil;
+map_remove(Items, Key) -> maps:remove(Key, Items).
+
+%% Strings are byte-preserving binaries. File failures return explicit results;
+%% decimal parsing uses the language's signed 64-bit range, never wrapping input.
+read_file(Path) ->
+    case file:read_file(Path) of
+        {ok, Text} -> value_result(Text, true, <<>>);
+        {error, Reason} -> value_result(<<>>, false, atom_to_binary(Reason, utf8))
+    end.
+
+write_file(Path, Text) ->
+    case file:write_file(Path, Text) of
+        ok -> io_result(true, <<>>);
+        {error, Reason} -> io_result(false, atom_to_binary(Reason, utf8))
+    end.
+
+text_split(_, <<>>) -> erlang:error(linglang_empty_separator);
+text_split(Text, Separator) -> binary:split(Text, Separator, [global]).
+
+%% ASCII whitespace is deliberate: arbitrary file bytes need not be valid UTF-8.
+text_trim(Text) ->
+    trim_end(trim_start(Text)).
+
+trim_start(<<C, Rest/binary>>) when C =:= 32; C >= 9, C =< 13 -> trim_start(Rest);
+trim_start(Text) -> Text.
+
+trim_end(<<>>) -> <<>>;
+trim_end(Text) ->
+    Last = byte_size(Text) - 1,
+    case binary:at(Text, Last) of
+        C when C =:= 32; C >= 9, C =< 13 -> trim_end(binary:part(Text, 0, Last));
+        _ -> Text
+    end.
+
+parse_int(<<$-, Digits/binary>>) -> parse_decimal(Digits, -1, 1 bsl 63);
+parse_int(<<$+, Digits/binary>>) -> parse_decimal(Digits, 1, (1 bsl 63) - 1);
+parse_int(Digits) -> parse_decimal(Digits, 1, (1 bsl 63) - 1).
+
+parse_decimal(<<>>, _, _) -> value_result(0, false, <<"invalid integer">>);
+parse_decimal(Digits, Sign, Limit) ->
+    case decimal_digits(Digits, 0, Limit) of
+        {ok, Value} -> value_result(Sign * Value, true, <<>>);
+        {error, Reason} -> value_result(0, false, Reason)
+    end.
+
+%% Bound the accumulator so arbitrarily long input never creates a huge bignum.
+decimal_digits(<<>>, Value, _) -> {ok, Value};
+decimal_digits(<<Digit, Rest/binary>>, Value, Limit) when Digit >= $0, Digit =< $9 ->
+    Next = Value * 10 + Digit - $0,
+    case Next =< Limit of
+        true -> decimal_digits(Rest, Next, Limit);
+        false -> {error, <<"integer out of range">>}
+    end;
+decimal_digits(_, _, _) -> {error, <<"invalid integer">>}.
+
+format_int(Value) -> integer_to_binary(Value).
+
+arguments() -> [unicode:characters_to_binary(Arg) || Arg <- init:get_plain_arguments()].
+
+value_result(Value, OK, Reason) ->
+    #{field_76616c7565 => Value, field_6f6b => OK, field_726561736f6e => Reason}.
+
+io_result(OK, Reason) -> #{field_6f6b => OK, field_726561736f6e => Reason}.
 
 stats() ->
     Frames = state(frames, []),
@@ -222,7 +343,7 @@ stats() ->
       reclaimed_cells => state(reclaimed_cells, 0),
       collections => state(collections, 0),
       root_frames => length(Frames),
-      root_entries => lists:sum([map_size(Frame) || Frame <- Frames])}.
+      root_entries => lists:sum([map_size(root_ids(Frame)) || Frame <- Frames])}.
 
 set_gc_stress(Enabled) when is_boolean(Enabled) ->
     put({linglang_gc, stress}, Enabled),
@@ -296,6 +417,8 @@ print(Values, Newline) ->
     end.
 
 format_value(Value) when is_binary(Value) -> Value;
+format_value(Value) when is_list(Value) ->
+    ["[", lists:join(", ", [format_value(Item) || Item <- Value]), "]"];
 format_value(Value) -> io_lib:format("~tp", [Value]).
 
 loop(Condition, Body, Post, Token) ->

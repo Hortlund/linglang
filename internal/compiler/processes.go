@@ -19,6 +19,10 @@ type ChildOptions struct { restart string; shutdownMillis int }
 type Child struct { pid Pid; ok bool; reason string }
 type Delivery[T any] struct { value T; ok bool }
 type Exit struct { pid Pid; ok bool; normal bool; reason string }
+type List[T any] []T
+func prepend[T any](value T, items List[T]) List[T] { return nil }
+func head[T any](items List[T]) Delivery[T] { return Delivery[T]{} }
+func tail[T any](items List[T]) List[T] { return nil }
 func self() Pid { return nil }
 func spawn[T any](worker func(T), args T) Pid { return nil }
 func spawnMonitor[T any](worker func(T), args T) Process { return Process{} }
@@ -38,7 +42,7 @@ func stopSupervisor(supervisor Supervisor) bool { return false }
 `
 
 func (c *compiler) prelude() (*ast.File, error) {
-	return parser.ParseFile(c.fset, "<linglang-processes>", processPrelude, 0)
+	return parser.ParseFile(c.fset, "<linglang-prelude>", processPrelude+standardPrelude+mapPrelude, 0)
 }
 
 func (c *compiler) registerIntrinsics(file *ast.File) {
@@ -85,6 +89,36 @@ func (c *compiler) opaqueProcessType(t types.Type) bool {
 // identity and complete field shapes prevent structurally similar messages, or
 // mismatched versions of a message, from being silently confused.
 func (c *compiler) messageSchema(t types.Type) (string, error) {
+	return c.messageSchemaSeen(t, map[types.Type]bool{})
+}
+
+func (c *compiler) messageSchemaSeen(t types.Type, seen map[types.Type]bool) (string, error) {
+	if seen[t] {
+		return "", fmt.Errorf("recursive message types are not supported")
+	}
+	seen[t] = true
+	defer delete(seen, t)
+	if key, value, ok := c.mapTypes(t); ok {
+		if !supportedMapKey(key) {
+			return "", fmt.Errorf("Map keys must be int or string")
+		}
+		keyShape, err := c.messageSchemaSeen(key, seen)
+		if err != nil {
+			return "", err
+		}
+		valueShape, err := c.messageSchemaSeen(value, seen)
+		if err != nil {
+			return "", fmt.Errorf("map value: %w", err)
+		}
+		return "{map, " + keyShape + ", " + valueShape + "}", nil
+	}
+	if element, ok := c.listElement(t); ok {
+		shape, err := c.messageSchemaSeen(element, seen)
+		if err != nil {
+			return "", fmt.Errorf("list element: %w", err)
+		}
+		return "{list, " + shape + "}", nil
+	}
 	if c.processType(t, "Pid") {
 		return "pid", nil
 	}
@@ -107,7 +141,7 @@ func (c *compiler) messageSchema(t types.Type) (string, error) {
 	case *types.Pointer:
 		return "", fmt.Errorf("process-local pointers cannot cross a process boundary")
 	case *types.Named:
-		shape, err := c.messageSchema(t.Underlying())
+		shape, err := c.messageSchemaSeen(t.Underlying(), seen)
 		if err != nil {
 			return "", err
 		}
@@ -117,7 +151,7 @@ func (c *compiler) messageSchema(t types.Type) (string, error) {
 		var fields []string
 		for i := 0; i < t.NumFields(); i++ {
 			field := t.Field(i)
-			shape, err := c.messageSchema(field.Type())
+			shape, err := c.messageSchemaSeen(field.Type(), seen)
 			if err != nil {
 				return "", fmt.Errorf("field %s: %w", field.Name(), err)
 			}
@@ -136,6 +170,10 @@ func (c *compiler) processCall(call *ast.CallExpr) (string, bool, error) {
 	name, ok := c.intrinsics[c.info.Uses[id]]
 	if !ok {
 		return "", false, nil
+	}
+	if name == "prepend" || name == "head" || name == "tail" {
+		code, err := c.listIntrinsic(call, name)
+		return code, true, err
 	}
 	sig := c.info.TypeOf(call.Fun).(*types.Signature)
 	var schema string

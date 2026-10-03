@@ -1,0 +1,86 @@
+package main
+
+const (
+    Enqueue = iota + 1
+    WorkerReady
+    JobFinished
+)
+
+type Job struct { id int; input int }
+type Result struct { id int; value int }
+type Command struct { kind int; jobs List[Job]; worker Pid; result Result }
+type Work struct { job Job; crash bool }
+type Summary struct { results List[Result]; restarts int }
+
+func worker(queue Pid) {
+    // Every replacement announces itself to the surviving queue process.
+    send(queue, Command{kind: WorkerReady, worker: self()})
+    for {
+        delivery := receive[Work](-1)
+        work := delivery.value
+        if work.crash { panic("job queue demonstration crash") }
+        result := Result{id: work.job.id, value: work.job.input * work.job.input}
+        send(queue, Command{kind: JobFinished, worker: self(), result: result})
+    }
+}
+
+func queue(parent Pid) {
+    var pending List[Job]
+    var results List[Result]
+    var current Pid
+    submitted := false
+    running := false
+    restarts := 0
+    crashOnce := true
+    for {
+        delivery := receive[Command](-1)
+        cmd := delivery.value
+        switch cmd.kind {
+        case Enqueue:
+            pending = append(pending, cmd.jobs...)
+            submitted = true
+        case WorkerReady:
+            if current != nil { restarts++ }
+            current = cmd.worker
+            running = false
+        case JobFinished:
+            first := head(pending)
+            if first.ok && cmd.worker == current && cmd.result.id == first.value.id {
+                results = append(results, cmd.result)
+                pending = tail(pending)
+                running = false
+            }
+        }
+        if submitted && len(pending) == 0 {
+            send(parent, Summary{results: results, restarts: restarts})
+            return
+        }
+        if current != nil && !running && len(pending) > 0 {
+            // Keep the head pending until acknowledgement. A restarted worker
+            // gets the same job. This demonstrates at-least-once delivery.
+            send(current, Work{job: head(pending).value, crash: crashOnce})
+            crashOnce = false
+            running = true
+        }
+    }
+}
+
+func main() {
+    service := spawnMonitor(queue, self())
+    supervisor := startSupervisor(3, 5)
+    child := supervise(supervisor, "worker", worker, service.pid, ChildOptions{restart: "permanent"})
+    if !child.ok { panic(child.reason) }
+    jobs := List[Job]{Job{id: 1, input: 4}, Job{id: 2, input: 5}, Job{id: 3, input: 6}}
+    send(service.pid, Command{kind: Enqueue, jobs: jobs})
+    delivery := receive[Summary](5000)
+    if !delivery.ok { panic("queue response timed out") }
+    summary := delivery.value
+    var values List[int]
+    for _, result := range summary.results { values = append(values, result.value) }
+    println("Results:", values)
+    println("Completed:", len(summary.results))
+    println("Worker restarts:", summary.restarts)
+    exited := wait(service.monitor, 5000)
+    if !exited.ok || !exited.normal { panic("queue did not finish normally") }
+    println("Supervisor stopped:", stopSupervisor(supervisor))
+}

@@ -35,15 +35,20 @@ func executeScript(t *testing.T, source, script string) (string, error) {
 
 func executeScriptWithOptions(t *testing.T, source, script string, options Options) (string, error) {
 	t.Helper()
+	program, err := CompileWithOptions("test.lang", []byte("package main\n"+source), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return executeCompiledScript(t, program, script)
+}
+
+func executeCompiledScript(t *testing.T, program, script string) (string, error) {
+	t.Helper()
 	if _, err := exec.LookPath("erlc"); err != nil {
 		t.Fatal("integration tests require Erlang/OTP (erlc)")
 	}
 	if _, err := exec.LookPath("erl"); err != nil {
 		t.Fatal("integration tests require Erlang/OTP (erl)")
-	}
-	program, err := CompileWithOptions("test.lang", []byte("package main\n"+source), options)
-	if err != nil {
-		t.Fatal(err)
 	}
 	dir := t.TempDir()
 	sources := RuntimeSources()

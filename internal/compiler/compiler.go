@@ -32,11 +32,13 @@ type compiler struct {
 	next         int
 	ret          string
 	loops        []string
+	breaks       []string
 	values       map[types.Object]string
 	optimizing   bool
 	rooted       bool
 	intrinsics   map[types.Object]string
 	processTypes map[string]*types.Named
+	rangeOps     map[ast.Expr]string
 }
 
 // Options retains the original cell-based lowering for comparisons and debugging.
@@ -84,7 +86,7 @@ func CompileWithOptions(filename string, source []byte, options Options) (string
 	if sig.Params().Len() != 0 || sig.Results().Len() != 0 {
 		return "", c.errorf(file, "main must have no parameters or results")
 	}
-	// Check every variable, including unused struct fields and function parameters.
+	// Check every variable and constant, including unused declarations and fields.
 	var validationErr error
 	ast.Inspect(file, func(n ast.Node) bool {
 		if validationErr != nil {
@@ -94,18 +96,35 @@ func CompileWithOptions(filename string, source []byte, options Options) (string
 			if v, ok := c.info.Defs[id].(*types.Var); ok && !c.supportedType(v.Type(), map[types.Type]bool{}) {
 				validationErr = c.errorf(id, "unsupported type %s", v.Type())
 			}
+			if v, ok := c.info.Defs[id].(*types.Const); ok && !supportedConstantType(v.Type()) {
+				validationErr = c.errorf(id, "unsupported constant type %s (use int, bool, or string)", v.Type())
+			}
+		}
+		if expr, ok := n.(ast.Expr); ok {
+			t := c.info.TypeOf(expr)
+			_, list := c.listElement(t)
+			_, _, dictionary := c.mapTypes(t)
+			if (list || dictionary) && !c.supportedType(t, map[types.Type]bool{}) {
+				validationErr = c.errorf(expr, "unsupported type %s", t)
+			}
 		}
 		return true
 	})
 	if validationErr != nil {
 		return "", validationErr
 	}
+	if err := c.lowerRanges(file); err != nil {
+		return "", err
+	}
 	var functions []string
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.GenDecl:
+			if d.Tok == token.CONST {
+				continue // go/types resolves constants, including grouped iota declarations.
+			}
 			if d.Tok != token.TYPE {
-				return "", c.errorf(d, "top-level variables and constants are not supported yet")
+				return "", c.errorf(d, "top-level variables are not supported yet")
 			}
 			for _, spec := range d.Specs {
 				t := spec.(*ast.TypeSpec)
@@ -154,6 +173,12 @@ func (c *compiler) supportedType(t types.Type, seen map[types.Type]bool) bool {
 		return true
 	}
 	seen[t] = true
+	if element, ok := c.listElement(t); ok {
+		return c.supportedType(element, seen)
+	}
+	if key, value, ok := c.mapTypes(t); ok {
+		return supportedMapKey(key) && c.supportedType(value, seen)
+	}
 	switch t := t.(type) {
 	case *types.Basic:
 		return t.Kind() == types.Int || t.Kind() == types.Bool || t.Kind() == types.String
@@ -213,6 +238,7 @@ func (c *compiler) function(fn *ast.FuncDecl) (string, error) {
 	}
 	c.ret = c.fresh()
 	c.loops = nil
+	c.breaks = nil
 	var args, setup []string
 	for i := 0; i < sig.Params().Len(); i++ {
 		param := sig.Params().At(i)
@@ -253,7 +279,7 @@ func (c *compiler) statement(stmt ast.Stmt) (string, error) {
 		return "", err
 	}
 	switch s := stmt.(type) {
-	case *ast.DeclStmt, *ast.BlockStmt, *ast.IfStmt, *ast.ForStmt:
+	case *ast.DeclStmt, *ast.BlockStmt, *ast.IfStmt, *ast.ForStmt, *ast.SwitchStmt:
 		return code, nil
 	case *ast.AssignStmt:
 		if s.Tok == token.DEFINE {
@@ -277,6 +303,9 @@ func (c *compiler) statementCode(stmt ast.Stmt) (string, error) {
 		return c.expression(s.X)
 	case *ast.DeclStmt:
 		d := s.Decl.(*ast.GenDecl)
+		if d.Tok == token.CONST {
+			return "ok", nil
+		}
 		if d.Tok != token.VAR {
 			return "", c.errorf(d, "only var declarations are supported inside functions")
 		}
@@ -376,6 +405,8 @@ func (c *compiler) statementCode(stmt ast.Stmt) (string, error) {
 			}
 		}
 		return "case " + scoped(cond) + " of true -> " + body + "; false -> " + other + " end", nil
+	case *ast.SwitchStmt:
+		return c.switchStatement(s)
 	case *ast.ForStmt:
 		init, cond, post := "ok", "true", "ok"
 		var err error
@@ -409,8 +440,10 @@ func (c *compiler) statementCode(stmt ast.Stmt) (string, error) {
 		}
 		loop := c.fresh()
 		c.loops = append(c.loops, loop)
+		c.breaks = append(c.breaks, loop)
 		body, err := c.block(s.Body)
 		c.loops = c.loops[:len(c.loops)-1]
+		c.breaks = c.breaks[:len(c.breaks)-1]
 		if err != nil {
 			return "", err
 		}
@@ -420,10 +453,17 @@ func (c *compiler) statementCode(stmt ast.Stmt) (string, error) {
 		// Wrap loop initialization so its variables cannot escape into the next loop.
 		return scoped(init + ", " + loop + " = make_ref(), linglang_rt:loop(fun() -> " + cond + " end, fun() -> " + body + " end, fun() -> " + post + " end, " + loop + ")"), nil
 	case *ast.BranchStmt:
-		if s.Label != nil || len(c.loops) == 0 || (s.Tok != token.BREAK && s.Tok != token.CONTINUE) {
-			return "", c.errorf(s, "only unlabelled break and continue in loops are supported")
+		if s.Label != nil || (s.Tok != token.BREAK && s.Tok != token.CONTINUE) {
+			return "", c.errorf(s, "only unlabelled break and continue are supported; fallthrough is not supported")
 		}
-		return "throw({linglang_" + s.Tok.String() + ", " + c.loops[len(c.loops)-1] + "})", nil
+		targets := c.loops
+		if s.Tok == token.BREAK {
+			targets = c.breaks
+		}
+		if len(targets) == 0 {
+			return "", c.errorf(s, "%s requires an enclosing loop or switch", s.Tok)
+		}
+		return "throw({linglang_" + s.Tok.String() + ", " + targets[len(targets)-1] + "})", nil
 	default:
 		return "", c.errorf(stmt, "unsupported statement %T", stmt)
 	}
@@ -445,6 +485,11 @@ func (c *compiler) ordered(expressions []string, finish func([]string) string) s
 }
 
 func (c *compiler) expression(expr ast.Expr) (string, error) {
+	if operation := c.rangeOps[expr]; operation != "" {
+		call := expr.(*ast.CallExpr)
+		value, err := c.expression(call.Args[0])
+		return "linglang_rt:list_" + operation + "(" + value + ")", err
+	}
 	if value := c.info.Types[expr].Value; value != nil {
 		switch value.Kind() {
 		case constant.Int:
@@ -517,6 +562,12 @@ func (c *compiler) expression(expr ast.Expr) (string, error) {
 		}
 		return c.ordered([]string{left, right}, func(v []string) string { return "linglang_rt:binary(" + op + ", " + v[0] + ", " + v[1] + ")" }), nil
 	case *ast.CompositeLit:
+		if _, ok := c.listElement(c.info.TypeOf(e)); ok {
+			return c.listLiteral(e)
+		}
+		if _, _, ok := c.mapTypes(c.info.TypeOf(e)); ok {
+			return c.mapLiteral(e)
+		}
 		_, ok := c.info.TypeOf(e).Underlying().(*types.Struct)
 		if !ok {
 			return "", c.errorf(e, "only struct literals are supported")
@@ -546,6 +597,15 @@ func (c *compiler) expression(expr ast.Expr) (string, error) {
 			return "(" + c.zero(c.info.TypeOf(e)) + ")#{" + strings.Join(fields, ", ") + "}"
 		}), nil
 	case *ast.CallExpr:
+		if code, handled, err := c.mapCall(e); handled {
+			return code, err
+		}
+		if code, handled, err := c.listBuiltin(e); handled {
+			return code, err
+		}
+		if code, handled, err := c.standardCall(e); handled {
+			return code, err
+		}
 		if code, intrinsic, err := c.processCall(e); intrinsic {
 			return code, err
 		}
@@ -617,6 +677,12 @@ func (c *compiler) address(expr ast.Expr) (string, error) {
 }
 
 func (c *compiler) zero(t types.Type) string {
+	if _, _, ok := c.mapTypes(t); ok {
+		return "nil"
+	}
+	if _, ok := c.listElement(t); ok {
+		return "nil"
+	}
 	if c.opaqueProcessType(t) {
 		return "nil"
 	}

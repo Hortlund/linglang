@@ -19,7 +19,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		fmt.Println("Usage:\n  linglang run [--no-opt] [--gc-stats] [--gc-stress] <file.lang>\n  linglang build [--no-opt] [-o directory] <file.lang>\n  linglang emit [--no-opt] <file.lang>")
+		fmt.Println("Usage:\n  linglang run [--no-opt] [--gc-stats] [--gc-stress] <file.lang> [args...]\n  linglang build [--no-opt] [-o directory] <file.lang>\n  linglang emit [--no-opt] <file.lang>")
 		return nil
 	}
 	command := args[0]
@@ -40,8 +40,8 @@ func run(args []string) error {
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	if flags.NArg() != 1 {
-		return fmt.Errorf("%s expects one source file", command)
+	if flags.NArg() == 0 || (command != "run" && flags.NArg() != 1) {
+		return fmt.Errorf("%s expects one source file (only run accepts program arguments)", command)
 	}
 	source, err := os.ReadFile(flags.Arg(0))
 	if err != nil {
@@ -74,7 +74,9 @@ func run(args []string) error {
 		fmt.Println("Built BEAM modules in", absolute)
 		return nil
 	}
-	cmd := exec.Command("erl", "-noshell", "-pa", dir, "-eval", evaluationScript(gcStress, gcStats))
+	erlArgs := []string{"-noshell", "-pa", dir, "-eval", evaluationScript(gcStress, gcStats), "-extra"}
+	erlArgs = append(erlArgs, flags.Args()[1:]...)
+	cmd := exec.Command("erl", erlArgs...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("BEAM execution failed: %w", err)

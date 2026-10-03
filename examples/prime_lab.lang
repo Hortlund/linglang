@@ -1,0 +1,173 @@
+package main
+
+// Run from the repository root:
+// go run ./cmd/linglang run examples/prime_lab.lang examples/prime_jobs.txt prime-results.csv
+const (
+    Enqueue = iota + 1
+    WorkerReady
+    JobFinished
+)
+const WorkerCount = 3
+
+type Job struct { id int; limit int }
+type Result struct { id int; limit int; count int; largest int }
+type Command struct { kind int; jobs List[Job]; slot int; worker Pid; result Result }
+type Work struct { job Job; crash bool }
+type Summary struct { results List[Result]; restarts int; peak int }
+type WorkerArgs struct { queue Pid; slot int }
+type QueueArgs struct { parent Pid; workers int; crash bool }
+type WorkerState struct { pid Pid; job int }
+
+func isPrime(n int) bool {
+    if n < 2 { return false }
+    for divisor := 2; divisor * divisor <= n; divisor++ {
+        if n % divisor == 0 { return false }
+    }
+    return true
+}
+
+func worker(args WorkerArgs) {
+    send(args.queue, Command{kind: WorkerReady, slot: args.slot, worker: self()})
+    for {
+        work := receive[Work](-1).value
+        if work.crash { panic("prime lab: deliberate worker crash; OTP will restart me") }
+        result := Result{id: work.job.id, limit: work.job.limit}
+        for n := 2; n <= work.job.limit; n++ {
+            if isPrime(n) { result.count++; result.largest = n }
+        }
+        done := Command{kind: JobFinished, slot: args.slot, worker: self(), result: result}
+        send(args.queue, done)
+        // Exercise duplicate delivery: only the current assignment may be acknowledged.
+        send(args.queue, done)
+    }
+}
+
+func queue(args QueueArgs) {
+    var jobs List[Job]
+    var pending List[Job]
+    var results Map[int,Result]
+    var workers Map[int,WorkerState]
+    var assigned Map[int,Job]
+    submitted := false
+    restarts := 0
+    crashOnce := args.crash
+    running := 0
+    peak := 0
+    for {
+        cmd := receive[Command](-1).value
+        switch cmd.kind {
+        case Enqueue:
+            if !submitted {
+                jobs = cmd.jobs
+                pending = jobs
+                submitted = true
+            }
+        case WorkerReady:
+            if cmd.slot >= 1 && cmd.slot <= args.workers && cmd.worker != nil {
+                previous := get(workers, cmd.slot)
+                if !previous.ok || previous.value.pid != cmd.worker {
+                    if previous.ok {
+                        restarts++
+                        retry := get(assigned, cmd.slot)
+                        if retry.ok {
+                            pending = prepend(retry.value, pending)
+                            assigned = remove(assigned, cmd.slot)
+                            running--
+                        }
+                    }
+                    workers = put(workers, cmd.slot, WorkerState{pid: cmd.worker})
+                }
+            }
+        case JobFinished:
+            current := get(workers, cmd.slot)
+            job := get(assigned, cmd.slot)
+            if current.ok && job.ok && current.value.pid == cmd.worker &&
+                cmd.result.id == job.value.id && cmd.result.limit == job.value.limit {
+                results = put(results, cmd.result.id, cmd.result)
+                assigned = remove(assigned, cmd.slot)
+                workers = put(workers, cmd.slot, WorkerState{pid: cmd.worker})
+                running--
+            }
+        }
+        if submitted && len(results) == len(jobs) {
+            var ordered List[Result]
+            for _, job := range jobs { ordered = append(ordered, get(results, job.id).value) }
+            send(args.parent, Summary{results: ordered, restarts: restarts, peak: peak})
+            return
+        }
+        // Wait for the whole pool before dispatching its first batch.
+        if submitted && len(workers) == args.workers {
+            for slot := 1; slot <= args.workers; slot++ {
+                current := get(workers, slot).value
+                if current.job == 0 && len(pending) > 0 {
+                    job := head(pending).value
+                    pending = tail(pending)
+                    assigned = put(assigned, slot, job)
+                    workers = put(workers, slot, WorkerState{pid: current.pid, job: job.id})
+                    send(current.pid, Work{job: job, crash: crashOnce})
+                    crashOnce = false
+                    running++
+                    if running > peak { peak = running }
+                }
+            }
+        }
+    }
+}
+
+func main() {
+    inputPath := "examples/prime_jobs.txt"
+    outputPath := "prime-results.csv"
+    options := args()
+    if len(options) > 2 { panic("usage: prime_lab.lang [input-file] [output-file]") }
+    if head(options).ok { inputPath = head(options).value; options = tail(options) }
+    if head(options).ok { outputPath = head(options).value }
+    input := readFile(inputPath)
+    if !input.ok { panic("cannot read " + inputPath + ": " + input.reason) }
+
+    var jobs List[Job]
+    skipped := 0
+    for lineNumber, raw := range split(input.value, "\n") {
+        // Blank lines and # comments are welcome. Bad jobs do not kill the batch.
+        line := trim(head(split(raw, "#")).value)
+        if line == "" { continue }
+        parsed := parseInt(line)
+        if !parsed.ok || parsed.value < 2 || parsed.value > 100000 {
+            // Report the location without sending arbitrary file bytes to Unicode output.
+            println("Skipping line", lineNumber + 1, "(expected an integer from 2 to 100000)")
+            skipped++
+            continue
+        }
+        jobs = append(jobs, Job{id: len(jobs) + 1, limit: parsed.value})
+    }
+
+    println("BEAM prime lab")
+    println("Loaded jobs:", len(jobs), "| Skipped:", skipped)
+    service := spawnMonitor(queue, QueueArgs{parent: self(), workers: WorkerCount, crash: true})
+    supervisor := startSupervisor(3, 5)
+    for slot := 1; slot <= WorkerCount; slot++ {
+        child := supervise(supervisor, "prime-worker-" + formatInt(slot), worker,
+            WorkerArgs{queue: service.pid, slot: slot}, ChildOptions{restart: "permanent"})
+        if !child.ok { panic(child.reason) }
+    }
+    if len(jobs) > 0 { println("Crashing the first worker on purpose; the queue will retry its job.") }
+    send(service.pid, Command{kind: Enqueue, jobs: jobs})
+    delivery := receive[Summary](30000)
+    if !delivery.ok { panic("prime lab response timed out") }
+    summary := delivery.value
+    exited := wait(service.monitor, 5000)
+    if !exited.ok || !exited.normal { panic("queue did not finish normally") }
+    stopped := stopSupervisor(supervisor)
+    if !stopped { panic("supervisor did not stop") }
+
+    report := "job,limit,prime_count,largest_prime\n"
+    for _, result := range summary.results {
+        println("Up to", result.limit, ":", result.count, "primes | Largest:", result.largest)
+        report += formatInt(result.id) + "," + formatInt(result.limit) + "," + formatInt(result.count) + "," + formatInt(result.largest) + "\n"
+    }
+    written := writeFile(outputPath, report)
+    if !written.ok { panic("cannot write " + outputPath + ": " + written.reason) }
+    println("Completed:", len(summary.results), "| Worker restarts:", summary.restarts)
+    println("Pool workers:", WorkerCount, "| Peak active:", summary.peak)
+    println("Supervisor stopped:", stopped)
+    println("Saved CSV:", outputPath)
+}
