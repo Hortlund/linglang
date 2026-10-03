@@ -130,25 +130,7 @@ func TestBootstrapEmitterPackedWithoutGo(t *testing.T) {
 		t.Fatal(err)
 	}
 	otp := filepath.Join(dir, "otp")
-	if err := os.Mkdir(otp, 0700); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"erl", "erlc", "escript", "dirname"} {
-		path, err := exec.LookPath(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(path, filepath.Join(otp, name)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var env []string
-	for _, item := range os.Environ() {
-		if !strings.HasPrefix(item, "PATH=") {
-			env = append(env, item)
-		}
-	}
-	env = append(env, "PATH="+otp)
+	env := isolatedOTPEnvironment(t, otp, true)
 	invoke := func(name string, args ...string) (string, string, error) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

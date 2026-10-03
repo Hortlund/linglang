@@ -322,11 +322,14 @@ func TestBootstrapCheckerAgainstSeed(t *testing.T) {
 						// Checking the full frontend, including its tests, is much larger
 						// than the small fixtures. The reference backend stores every
 						// local in a managed cell; keep its self-check bounded separately.
-						budget = 120 * time.Second
+						budget = 5 * time.Minute
 					}
 					ctx, cancel := context.WithTimeout(context.Background(), budget)
 					defer cancel()
 					out, err := exec.CommandContext(ctx, "erl", argv...).CombinedOutput()
+					if ctx.Err() != nil {
+						t.Fatalf("checker timed out after %s\n%s", budget, out)
+					}
 					if (err == nil) != f.valid {
 						t.Fatalf("checker valid=%v: %v\n%s", f.valid, err, out)
 					}
@@ -361,32 +364,7 @@ func TestBootstrapCheckerPackedWithoutSeed(t *testing.T) {
 		t.Fatal(err)
 	}
 	isolated := filepath.Join(dir, "runtime")
-	if err := os.Mkdir(isolated, 0700); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"escript", "erl", "dirname"} {
-		path, err := exec.LookPath(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		path, err = filepath.EvalSymlinks(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(path, filepath.Join(isolated, name)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var env []string
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		switch key {
-		case "PATH", "ERL_LIBS", "ERL_FLAGS", "ERL_AFLAGS", "ERL_ZFLAGS":
-		default:
-			env = append(env, entry)
-		}
-	}
-	env = append(env, "PATH="+isolated)
+	env := isolatedOTPEnvironment(t, isolated, false)
 	var args []string
 	for _, source := range sources {
 		path := filepath.Join(dir, "雪 "+filepath.Base(source.Filename))

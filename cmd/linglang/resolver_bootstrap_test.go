@@ -207,32 +207,7 @@ func TestBootstrapResolverPackedWithoutSeed(t *testing.T) {
 		t.Fatal(err)
 	}
 	isolated := filepath.Join(dir, "runtime")
-	if err := os.Mkdir(isolated, 0700); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"escript", "erl", "dirname"} {
-		path, err := exec.LookPath(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		path, err = filepath.EvalSymlinks(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(path, filepath.Join(isolated, name)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var environment []string
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		switch key {
-		case "PATH", "ERL_LIBS", "ERL_FLAGS", "ERL_AFLAGS", "ERL_ZFLAGS":
-		default:
-			environment = append(environment, entry)
-		}
-	}
-	environment = append(environment, "PATH="+isolated)
+	environment := isolatedOTPEnvironment(t, isolated, false)
 	args := []string{}
 	for i, source := range sources {
 		path := filepath.Join(dir, "雪 "+filepath.Base(source.Filename))

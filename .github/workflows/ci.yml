@@ -32,7 +32,9 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Compiler, runtime, CLI, packaging, and release tests
-        run: go test ./... -count=1 -timeout=10m
+        # The baseline frontend self-check plus per-fixture BEAM launches can
+        # exceed ten minutes on hosted runners. Individual VMs remain bounded.
+        run: go test ./... -count=1 -timeout=20m
       - name: Build the CLI
         run: go build -o _build/linglang ./cmd/linglang
       - name: Check example formatting

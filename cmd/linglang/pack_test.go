@@ -25,29 +25,10 @@ func TestPackCLI(t *testing.T) {
 	if out, err := exec.CommandContext(ctx, "go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build CLI: %v\n%s", err, out)
 	}
-	// Launch from an isolated folder with only OTP and its shell helper on PATH.
+	// Launch from an isolated folder with only OTP and its shell helpers on PATH.
 	// No Go, linglang, erlc, or source checkout is available to the executable.
 	runtimeDir := t.TempDir()
-	for _, name := range []string{"escript", "erl", "dirname"} {
-		path, err := exec.LookPath(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		path, err = filepath.EvalSymlinks(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(path, filepath.Join(runtimeDir, name)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var environment []string
-	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, "PATH=") && !strings.HasPrefix(entry, "ERL_LIBS=") && !strings.HasPrefix(entry, "ERL_FLAGS=") && !strings.HasPrefix(entry, "ERL_AFLAGS=") && !strings.HasPrefix(entry, "ERL_ZFLAGS=") {
-			environment = append(environment, entry)
-		}
-	}
-	environment = append(environment, "PATH="+runtimeDir)
+	environment := isolatedOTPEnvironment(t, runtimeDir, false)
 	invoke := func(dir string, env []string, command string, args ...string) (string, string, error) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
