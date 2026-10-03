@@ -1,4 +1,4 @@
-// Package lsp implements Linglang's editor server over the LSP stdio transport.
+// Package lsp implements linglang's editor server over the LSP stdio transport.
 package lsp
 
 import (

@@ -12,14 +12,14 @@ async function activate(context) {
   const watcher = vscode.workspace.createFileSystemWatcher('**/*.lang');
   const markerWatcher = vscode.workspace.createFileSystemWatcher('**/.linglang-standalone');
   context.subscriptions.push(watcher, markerWatcher);
-  client = new LanguageClient('linglang', 'Linglang', { command, args: ['lsp'] }, {
+  client = new LanguageClient('linglang', 'linglang', { command, args: ['lsp'] }, {
     documentSelector: [{ scheme: 'file', language: 'linglang' }],
     synchronize: { fileEvents: [watcher, markerWatcher] },
   });
   try {
     await client.start();
   } catch (error) {
-    vscode.window.showErrorMessage(`Linglang server could not start: ${error.message}. Set linglang.serverPath to your Linglang executable, then reload the window.`);
+    vscode.window.showErrorMessage(`linglang server could not start: ${error.message}. Set linglang.serverPath to your linglang executable, then reload the window.`);
   }
 }
 

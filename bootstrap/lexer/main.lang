@@ -1,6 +1,6 @@
 package main
 
-// This executable is written in Linglang. Only its seed compiler is Go.
+// This executable is written in linglang. Only its seed compiler is Go.
 func main() {
 	options := args()
 	if len(options) != 1 {

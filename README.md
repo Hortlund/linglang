@@ -1,6 +1,6 @@
 # linglang
 
-![Linglang language](https://img.shields.io/badge/language-Linglang-7B3FE4)
+![linglang language](https://img.shields.io/badge/language-linglang-7B3FE4)
 
 a programming language that answers the question nobody fucking asked.
 
@@ -547,7 +547,7 @@ go run ./cmd/linglang test --no-opt --gc-stress --gc-stats bootstrap/checker
 go run ./cmd/linglang test --timeout 5s bootstrap/checker
 ```
 
-these commands run the Linglang type checker tests. the checker checks the
+these commands run the linglang type checker tests. the checker checks the
 checker. somebody has to.
 
 `test` loads the immediate `.lang` files in one directory, including `_test.lang`.
@@ -637,7 +637,7 @@ linglang now has six computers checking its paperwork.
 
 ## linglang reads linglang
 
-the first bootstrap tool is a lexer written in Linglang. it turns source into
+the first bootstrap tool is a lexer written in linglang. it turns source into
 tokens with raw text, byte offsets, and line/column locations. it can read its
 own source. linglang has discovered literacy. this will end badly.
 
@@ -655,7 +655,7 @@ to run the lexer without Go or the seed compiler around:
 ./bin/linglang-lexer bootstrap/lexer/tokens.lang
 ```
 
-the packed lexer needs Erlang/OTP. its tokenization is all Linglang code;
+the packed lexer needs Erlang/OTP. its tokenization is all linglang code;
 Go's scanner is used only as a compatibility oracle in tests. comments, Unicode
 identifiers, integer literals, quoted text, operators, and automatic semicolons
 work. floats are still somebody else's problem.
@@ -672,7 +672,7 @@ this counts as thinking.
 ./bin/linglang-parser bootstrap/parser/expressions.lang
 ```
 
-the parser is written in Linglang and shares the lexer through two relative file
+the parser is written in linglang and shares the lexer through two relative file
 symlinks in `bootstrap/parser`. keep those links when copying the source directories.
 the packed executable needs only Erlang/OTP. the recipes can stay at home.
 
@@ -682,7 +682,7 @@ precedence is checked against Go's parser. broken syntax gets a filename, line,
 and column; excessive nesting gets a diagnostic too. the parser has boundaries.
 comments remain available through the lexer; the syntax tree omits them.
 
-the resolver is written in Linglang too. it knows which variable you meant.
+the resolver is written in linglang too. it knows which variable you meant.
 finally somebody does.
 
 ```sh
@@ -701,7 +701,7 @@ locations. its binding output is checked against the Go seed on both backends,
 including its own source. the packed resolver runs with Erlang/OTP and no Go.
 keep the relative lexer/parser symlinks when copying the bootstrap directories.
 
-the type checker is written in Linglang now. it can tell you that
+the type checker is written in linglang now. it can tell you that
 `1 + true` is stupid. personal growth.
 
 ```sh
@@ -731,4 +731,4 @@ because why the fuck not?
 i wanted `i++` and OTP supervision in the same language.
 one thing led to another and now the compiler needs a compiler.
 
-the seed compiler is written in Go. the bootstrap tools are written in Linglang.
+the seed compiler is written in Go. the bootstrap tools are written in linglang.

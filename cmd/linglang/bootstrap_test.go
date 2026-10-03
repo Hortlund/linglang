@@ -23,7 +23,7 @@ type scannedToken struct {
 }
 
 // The seed frontend provides an independent compatibility oracle. Both emitted
-// backends execute the actual Linglang lexer, including on its own source files.
+// backends execute the actual linglang lexer, including on its own source files.
 func TestBootstrapLexerAgainstGoScanner(t *testing.T) {
 	repo, err := filepath.Abs("../..")
 	if err != nil {
@@ -133,7 +133,7 @@ func scanSeedTokens(t *testing.T, data []byte) []scannedToken {
 		}
 		if kind == token.EOF {
 			text = ""
-			// Linglang gives EOF after a terminal newline its natural next-line
+			// linglang gives EOF after a terminal newline its natural next-line
 			// position. go/token omits that last empty line from its line table.
 			if len(data) > 0 && data[len(data)-1] == '\n' {
 				p.Line = strings.Count(string(data), "\n") + 1

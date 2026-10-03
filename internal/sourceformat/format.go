@@ -1,4 +1,4 @@
-// Package sourceformat formats Linglang source without running it.
+// Package sourceformat formats linglang source without running it.
 package sourceformat
 
 import (

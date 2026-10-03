@@ -1,4 +1,4 @@
-# Linglang for VS Code
+# linglang for VS Code
 
 The bean has colours now. Errors too. Those were already there.
 
@@ -18,7 +18,7 @@ Install the VSIX through **Extensions: Install from VSIX…**, or:
 code --install-extension dist/linglang-vscode-darwin-arm64.vsix
 ```
 
-Each VSIX bundles the Linglang executable for its target OS and architecture.
+Each VSIX bundles the linglang executable for its target OS and architecture.
 Set `linglang.serverPath` to use a different compiler build; reload the window
 after changing it. An unpackaged development extension uses `linglang` on PATH
 when this setting is empty. Only trusted workspaces start the server.

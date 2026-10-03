@@ -1,7 +1,7 @@
 {
   "name": "linglang",
-  "displayName": "Linglang",
-  "description": "Language support for Linglang: the bean has an editor now.",
+  "displayName": "linglang",
+  "description": "Language support for linglang: the bean has an editor now.",
   "version": "0.1.0",
   "publisher": "linglang",
   "license": "UNLICENSED",
@@ -22,7 +22,6 @@
       {
         "id": "linglang",
         "aliases": [
-          "Linglang",
           "linglang"
         ],
         "extensions": [
@@ -45,13 +44,13 @@
       }
     ],
     "configuration": {
-      "title": "Linglang",
+      "title": "linglang",
       "properties": {
         "linglang.serverPath": {
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
-          "description": "Path to the Linglang executable. Empty uses the bundled server, then linglang on PATH."
+          "description": "Path to the linglang executable. Empty uses the bundled server, then linglang on PATH."
         }
       }
     }

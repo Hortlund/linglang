@@ -55,7 +55,7 @@ async function runEditorTests() {
       const issues = vscode.languages.getDiagnostics(uri);
       return issues.length === 1 && issues[0].message.includes('unsupported return type float64');
     });
-    console.log('Linglang extension: activation, Unicode diagnostics, outline, formatting, unsaved updates, standalone boundaries, and return types passed');
+    console.log('linglang extension: activation, Unicode diagnostics, outline, formatting, unsaved updates, standalone boundaries, and return types passed');
   } finally {
     await vscode.commands.executeCommand('workbench.action.closeAllEditors');
     await fs.rm(dir, { recursive: true, force: true });
