@@ -252,6 +252,51 @@ failure handling, including deliberately wrong Go and Elixir answers.
 
 ## Bootstrap compiler phases
 
+To measure actual packed, self-built compilers on the same frozen source corpus:
+
+```sh
+python3 benchmarks/bootstrap.py --compiler before=_build/compiler-before --compiler after=bin/linglang-bootstrap --corpus _build/frozen-lexer --samples 3 --warmup 1 --out _build/benchmarks/selfbuilt-lexer.json
+```
+
+Preserve the before executable and dereference source symlinks when freezing the
+corpus. Keep its absolute path unchanged between runs. The script uses an
+OTP-only PATH, extracts the embedded modules, interleaves compiler order, and
+runs each sample in a fresh VM with one scheduler. Timing and reductions cover
+the compiler's `main` call, including discovery, reading, parsing, checking,
+emission, output, and managed heap cleanup; VM startup and unpacking are outside
+the interval. It records source and compiler hashes, output bytes/hashes, managed
+allocations, peak live cells, and GC counts, and requires zero live cells and root
+entries/frames after every run. Outputs must be deterministic within a compiler;
+different lowerings can produce different output. Use `--no-opt` with compilers
+that support the original cell lowering. A compiler-source corpus measures a
+rebuild's emission cost; OTP compilation and executable packaging remain outside
+this measurement. Avoid running tests or other benchmarks concurrently.
+
+The first native-local bootstrap slice was measured on macOS ARM64 / OTP 29,
+using the pre-change compiler and lexer sources frozen from `ae37e05`. The lexer
+comparison used seven measured samples and two warmups for each actual packed
+compiler, with interleaved order and no concurrent tests. Median compilation
+time fell from 975.400 ms to 933.292 ms (4.3%). Managed allocations fell from
+401,595 to 341,711 (14.9%); collections fell from 1,567 to 1,335 and peak live
+cells from 434 to 412. Reductions increased from 198,860,313 to 199,949,284
+(0.55%). The new compiler includes conservative local write/address analysis.
+Every sample finished with zero live cells and root entries/frames. These are
+local measurements, with no CI timing threshold. Raw reports live in
+`_build/bootstrap-opt/lexer-comparison.json`; the frozen corpus's absolute paths
+and per-file hashes are included in the report.
+
+For the full frozen compiler corpus, a single isolated pair took 172.255 s before
+and 174.772 s after (1.5% longer). Managed allocations fell from 5,219,447 to
+4,465,948 (14.4%), collections from 20,358 to 17,437, and peak live cells from
+468 to 447. Reductions increased 1.5%. This slice establishes lower allocation
+cost and a modest lexer improvement; the full rebuild measurement does not
+establish a speedup. The report is `_build/bootstrap-opt/rebuild-comparison.json`.
+New write/address analysis and binding lookup costs are targets for the next
+compiler optimization, alongside native values across branches and loops.
+
+The phase harness below measures Go-seeded compiler programs, so its optimized
+versus cell comparison concerns the seed's lowering of the compiler itself.
+
 ```sh
 go run ./cmd/bench -frontend -samples 7 -warmup 2 -out _build/benchmarks/frontend.json
 ```

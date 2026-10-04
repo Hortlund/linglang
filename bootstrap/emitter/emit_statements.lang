@@ -7,6 +7,9 @@ func emitBlock(e *Emitter, node SyntaxNode) string {
 		parts = append(parts, emitStatement(e, statement))
 	}
 	parts = append(parts, "ok")
+	if e.straight {
+		return "(begin " + join(parts, ",\n        ") + " end)"
+	}
 	return emitScope(join(parts, ",\n        "))
 }
 
@@ -33,7 +36,7 @@ func emitVariables(e *Emitter, node SyntaxNode) string {
 		if head(values).ok {
 			value = emitExpression(e, head(values).value, false)
 		}
-		parts = append(parts, emitCell(e, name, true)+" = "+emitNew(e, id, emitScope(value)))
+		parts = append(parts, emitDeclareLocal(e, name, emitScope(value)))
 	}
 	return "(begin " + join(parts, ", ") + " end)"
 }
@@ -53,7 +56,18 @@ func emitAssignment(e *Emitter, node SyntaxNode) string {
 	if node.text == ":=" {
 		id := emitDefinition(e, target).typeID
 		emitRequireType(e, id, target.at)
-		return emitCell(e, target, true) + " = " + emitNew(e, id, emitScope(value))
+		return emitDeclareLocal(e, target, emitScope(value))
+	}
+	key := emitLocalKey(e, target)
+	if get(e.valueLocals, key).value {
+		if node.text != "=" {
+			op := slice(node.text, 0, len(node.text)-1)
+			if op == "<<" || op == ">>" {
+				value = emitShiftCount(e, head(rhs).value)
+			}
+			value = emitOrdered(e, List[string]{get(e.values, key).value, value}, List[int]{emitValue(e, target).typeID, emitValue(e, head(rhs).value).typeID}, "fun(A, B) -> linglang_rt:binary("+emitOperator(op)+", A, B) end")
+		}
+		return emitAssignValue(e, key, emitScope(value))
 	}
 	// Evaluate and root the destination before the RHS can overwrite its last
 	// alias or collect. Read a compound-assignment value before evaluating RHS.
@@ -145,6 +159,10 @@ func emitStatement(e *Emitter, node SyntaxNode) string {
 		op := "add"
 		if node.text == "--" {
 			op = "sub"
+		}
+		key := emitLocalKey(e, target)
+		if get(e.valueLocals, key).value {
+			return emitAssignValue(e, key, "linglang_rt:binary("+op+", "+get(e.values, key).value+", 1)")
 		}
 		cell := emitFresh(e)
 		return emitScope(cell + " = " + emitAddress(e, target) + ", linglang_rt:keep(" + cell + "), linglang_rt:write(" + cell + ", linglang_rt:binary(" + op + ", linglang_rt:read(" + cell + "), 1))")

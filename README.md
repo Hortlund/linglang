@@ -823,8 +823,12 @@ compiler source. The opt-in proof also compiles C and checks execution, source
 diagnostics, and GC cleanup. On the local macOS ARM64 / OTP 29 run, B rebuilt C
 in about three minutes after type-aware tracing removed repeated scans of
 pointer-free AST/metadata values. A minimal Linglang-written CLI now supports
-`check`, `emit`, `build`, and `run`. Formatter, test runner, optimized bootstrap
-lowering, and full seed-language coverage still need further work.
+`check`, `emit`, `build`, and `run`. Its first optimized lowering uses ordinary
+BEAM values for non-addressed primitive parameters and straight-line primitive
+locals. Mutable parameters in functions with branches or loops, locals crossing
+those constructs, and addressable variables retain managed cells. Formatter,
+test runner, control-flow optimization, and full seed-language coverage still
+need further work.
 
 Run the full proof explicitly; it stays outside ordinary tests and push CI:
 
@@ -847,12 +851,15 @@ PATH. The compiler packages the program and its runtime into a movable escript:
 ./bin/linglang-bootstrap build -o bin/bootstrap-demo examples/bootstrap_demo
 ./bin/bootstrap-demo
 ./bin/linglang-bootstrap run --gc-stress --gc-stats examples/bootstrap_collections.lang
+./bin/linglang-bootstrap run --no-opt --gc-stress --gc-stats examples/bootstrap_collections.lang
 ./bin/linglang-bootstrap run examples/bootstrap_loops.lang -- "program argument"
 ./bin/linglang-bootstrap build -o bin/linglang-bootstrap-next bootstrap/emitter
 ```
 
 `check` validates the same supported program subset as `build` and `run`, including
-entry points and return flow, and prints no module. Directory inputs include
+entry points and return flow, and prints no module. `--no-opt` retains the
+original cell lowering as a semantic comparison mode. Both lowerings keep the
+same managed GC safe points and exception cleanup. Directory inputs include
 immediate `.lang` files in filename order, follow source-file symlinks, and exclude
 `_test.lang` files and nested directories. Multiple paths form one package.
 `build` defaults to `program.escript`; `-o` selects the output. It creates parent

@@ -10,6 +10,28 @@ func TestBootstrapOptions() {
 	ran := bootstrapOptions(List[string]{"run", "source", "--", "", "-flag", "snow 雪"})
 	assert(ran.command == "run" && len(ran.arguments) == 3)
 	assert(head(ran.arguments).value == "" && head(tail(ran.arguments)).value == "-flag")
+	assert(!ran.noOpt && bootstrapOptions(List[string]{"emit", "--no-opt", "main.lang"}).noOpt)
+	forwarded := bootstrapOptions(List[string]{"run", "main.lang", "--", "--no-opt"})
+	assert(!forwarded.noOpt && head(forwarded.arguments).value == "--no-opt")
+}
+
+func TestEmitterNativeLocals() {
+	parsed := parse("locals.lang", "package main\nfunc f(n int,s string,b bool)int{n++;x:=n;x*=2;s+=\"!\";b=!b;println(s,b);return x};func main(){println(f(3,\"ok\",true))}")
+	optimized := emitPackage(List[SyntaxNode]{parsed.root})
+	cells := emitPackageWithOptions(List[SyntaxNode]{parsed.root}, true)
+	assert(parsed.ok && optimized.ok && cells.ok)
+	// A wholly primitive straight-line program needs no managed cells.
+	assert(len(split(optimized.module, "linglang_rt:new(")) == 1)
+	assert(len(split(cells.module, "linglang_rt:new(")) > 1)
+	for _, source := range (List[string]{
+		"func f(n int)*int{return &n};func main(){println(*f(3))}",
+		"func f(n int)int{for n<3{n++};return n};func main(){println(f(0))}",
+		"func main(){x:=1;{x:=2;println(x)};println(x)}",
+	}) {
+		parsed = parse("boxed.lang", "package main\n"+source)
+		optimized = emitPackage(List[SyntaxNode]{parsed.root})
+		assert(parsed.ok && optimized.ok && len(split(optimized.module, "linglang_rt:new(")) > 1)
+	}
 }
 
 func TestCheckedMetadata() {

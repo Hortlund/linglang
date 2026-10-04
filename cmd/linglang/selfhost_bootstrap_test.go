@@ -15,8 +15,8 @@ import (
 	"linglang/internal/compiler"
 )
 
-// The compiler still emits managed cells, so keep the full rebuild proof opt-in
-// rather than adding it to ordinary tests or the lightweight push checks.
+// A full rebuild still takes substantially longer than the fixture suites,
+// so keep the proof opt-in rather than adding it to lightweight push checks.
 func TestBootstrapSelfHostProof(t *testing.T) {
 	if os.Getenv("LINGLANG_SELFHOST") != "1" {
 		t.Skip("set LINGLANG_SELFHOST=1 to run the Go -> A -> B -> C proof")
@@ -134,6 +134,8 @@ func TestBootstrapSelfHostProof(t *testing.T) {
 		testBootstrapRunLifetime(t, artifact, env)
 	})
 	for _, f := range []struct{ name, code, want string }{
+		{"native_locals", `func f(n int,s string,b bool)int{n++;x:=n;n+=x;x*=2;s+="!";b=!b;println(n,x,s,b);return x};func main(){println(f(3,"ok",true))}`, "8 8 ok! false\n8\n"},
+		{"range_parameter_assignment", `func f(i,n int)int{for i,n=range (List[int]{4,7}){println(i,n)};return i+n};func main(){println(f(10,20))}`, "0 4\n1 7\n8\n"},
 		{"control_and_collections", `func main(){total:=0;for _,n:=range (List[int]{1,2,3}){switch n{case 2:continue;default:m:=Map[int,int]{n:n*2};total+=get(m,n).value;break}};println(total)}`, "8\n"},
 		{"escaped_pointer", `type N struct{x int};func node()*N{n:=N{x:7};return &n};func main(){p:=node();for i:=0;i<30;i++{_=node()};switch p.x{case 7:p.x++;default:panic("wrong")};println(p.x)}`, "8\n"},
 		{"return_and_rune", `func value(n int)int{switch n{case 1:return runeAt("雪",0).value;default:return 0}};func main(){println(value(1),runeAt("\xff",0).ok)}`, "38634 false\n"},
@@ -165,6 +167,11 @@ func TestBootstrapSelfHostProof(t *testing.T) {
 			out, stderr, err = invoke(artifact, "run", "--gc-stress", "--gc-stats", path)
 			if err != nil || out != f.want {
 				t.Fatalf("C run: %q %v\n%s", out, err, stderr)
+			}
+			emitterCleanGC(t, stderr)
+			out, stderr, err = invoke(artifact, "run", "--no-opt", "--gc-stress", "--gc-stats", path)
+			if err != nil || out != f.want {
+				t.Fatalf("C cell oracle run: %q %v\n%s", out, err, stderr)
 			}
 			emitterCleanGC(t, stderr)
 			generated := compile(f.name, module)

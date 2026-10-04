@@ -18,6 +18,15 @@ import (
 func TestBootstrapEmitterPrograms(t *testing.T) {
 	type fixture struct{ name, code, want, failure string }
 	fixtures := []fixture{
+		{"local_versions", `func f(n int,s string,b bool)int{n++;x:=n;n+=x;x*=2;s+="!";b=!b;println(n,x,s,b);return x};func main(){println(f(3,"ok",true))}`, "8 8 ok! false\n8\n", ""},
+		{"local_overflow_and_shift", `func f(n int)int{n++;n--;n<<=2;n>>=1;return n};func main(){n:=9223372036854775807;n++;println(n,f(3));n=-1;n>>=64;println(n);n<<=64;println(n);x:=1;k:=0;x<<=(((1<<63)<<k)>>62);println(x)}`, "-9223372036854775808 6\n-1\n0\n4\n", ""},
+		{"local_address_escape", `func f(n int)*int{p:=&n;n++;return p};func main(){p:=f(3);(*p)++;println(*p)}`, "5\n", ""},
+		{"local_branch_address", `func f(n int,b bool)int{if b{p:=&n;(*p)++};return n};func main(){println(f(3,true),f(3,false))}`, "4 3\n", ""},
+		{"local_control_mutations", `func f(n int)int{for n<3{n++};switch n{case 3:n+=2};if n==5{n++};return n};func main(){println(f(0))}`, "6\n", ""},
+		{"local_range_parameter_assignment", `func f(i,n int)int{for i,n=range (List[int]{4,7}){println(i,n)};return i+n};func main(){println(f(10,20))}`, "0 4\n1 7\n8\n", ""},
+		{"local_shadowed_parameters", `func f(n int)int{{n:=8;p:=&n;(*p)++;println(n)};return n};func main(){println(f(3))}`, "9\n3\n", ""},
+		{"local_root_handoff", emitterPointerHelpers + `func f(n int)int{x:=n+2;p:=node(x);_=churn();println(x,p.x);x++;_=churn();return x+p.x};func main(){println(f(3))}`, "5 5\n11\n", ""},
+		{"local_effects_and_failure", `func effect(n int)int{print(n);return n};func f(n int){x:=effect(n);x=effect(x+1);_=effect(x+1);panic("local down")};func main(){f(1)}`, "123", "local down"},
 		{"operator_chain", `func main(){a:=1;println(a+2+3+4,a+a+a)}`, "10 3\n", ""},
 		{"constants_and_shadowing", `const Big=1<<200;const Answer=(Big+7)-Big;func main(){const Answer=8;println(Answer);{const Answer=9;println(Answer)};println(Answer)}`, "8\n9\n8\n", ""},
 		{"early_returns", `func f(n int)int{if n<0{return -1}else if n>0{return 1}else{return 0}};func main(){println(f(-7),f(0),f(7))}`, "-1 0 1\n", ""},
@@ -132,26 +141,38 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 						t.Fatal(err)
 					}
 					seedOut, seedErr, seedFailure := run(seedDir, true)
-					module, stderr, err := run(emitterDir, false, "-extra", path)
-					if err != nil {
-						t.Fatalf("emission: %v\n%s", err, stderr)
+					modes := []bool{false}
+					if strings.HasPrefix(f.name, "local_") {
+						modes = append(modes, true)
 					}
-					emitterCleanGC(t, stderr)
-					generatedDir := t.TempDir()
-					if err := build(generatedDir, module); err != nil {
-						t.Fatalf("emitted Erlang: %v\n%s", err, module)
-					}
-					out, stderr, failure := run(generatedDir, true)
-					emitterCleanGC(t, stderr)
-					emitterCleanGC(t, seedErr)
-					if out != seedOut || out != f.want || (failure == nil) != (seedFailure == nil) {
-						t.Fatalf("got %q (%v), seed %q (%v), want %q\n%s", out, failure, seedOut, seedFailure, f.want, stderr)
-					}
-					if f.failure != "" && (failure == nil || !strings.Contains(stderr, f.failure) || !strings.Contains(seedErr, f.failure)) {
-						t.Fatalf("missing failure %q: %v\n%s\nseed: %s", f.failure, failure, stderr, seedErr)
-					}
-					if f.failure == "" && failure != nil {
-						t.Fatalf("runtime: %v\n%s", failure, stderr)
+					for _, cells := range modes {
+						t.Run(fmt.Sprintf("cells=%v", cells), func(t *testing.T) {
+							args := []string{"-extra", "emit", path}
+							if cells {
+								args = append(args, "--no-opt")
+							}
+							module, stderr, err := run(emitterDir, false, args...)
+							if err != nil {
+								t.Fatalf("emission: %v\n%s", err, stderr)
+							}
+							emitterCleanGC(t, stderr)
+							generatedDir := t.TempDir()
+							if err := build(generatedDir, module); err != nil {
+								t.Fatalf("emitted Erlang: %v\n%s", err, module)
+							}
+							out, stderr, failure := run(generatedDir, true)
+							emitterCleanGC(t, stderr)
+							emitterCleanGC(t, seedErr)
+							if out != seedOut || out != f.want || (failure == nil) != (seedFailure == nil) {
+								t.Fatalf("got %q (%v), seed %q (%v), want %q\n%s", out, failure, seedOut, seedFailure, f.want, stderr)
+							}
+							if f.failure != "" && (failure == nil || !strings.Contains(stderr, f.failure) || !strings.Contains(seedErr, f.failure)) {
+								t.Fatalf("missing failure %q: %v\n%s\nseed: %s", f.failure, failure, stderr, seedErr)
+							}
+							if f.failure == "" && failure != nil {
+								t.Fatalf("runtime: %v\n%s", failure, stderr)
+							}
+						})
 					}
 				})
 			}

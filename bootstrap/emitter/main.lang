@@ -8,10 +8,11 @@ type BootstrapOptions struct {
 	stress    bool
 	stats     bool
 	help      bool
+	noOpt     bool
 }
 
 func bootstrapUsage() string {
-	return "usage: linglang-bootstrap <check|emit|build|run> [options] <source.lang|directory>...\n  build: -o <executable> (default: program.escript)\n  build/run: --gc-stress --gc-stats\n  run: -- <program arguments>\n  source paths without a command retain legacy emit behavior"
+	return "usage: linglang-bootstrap <check|emit|build|run> [options] <source.lang|directory>...\n  compiler: --no-opt (original cell lowering)\n  build: -o <executable> (default: program.escript)\n  build/run: --gc-stress --gc-stats\n  run: -- <program arguments>\n  source paths without a command retain legacy emit behavior"
 }
 
 func bootstrapOptions(values List[string]) BootstrapOptions {
@@ -35,7 +36,9 @@ func bootstrapOptions(values List[string]) BootstrapOptions {
 			options.arguments = values
 			break
 		}
-		if value == "-o" {
+		if value == "--no-opt" {
+			options.noOpt = true
+		} else if value == "-o" {
 			if options.command != "build" || !head(values).ok || head(values).value == "" {
 				panic("-o requires build and an output path")
 			}
@@ -95,7 +98,7 @@ func main() {
 		panic(filenames.reason)
 	}
 	files := bootstrapParse(filenames.value)
-	result := emitPackage(files)
+	result := emitPackageWithOptions(files, options.noOpt)
 	if !result.ok {
 		panic(result.at.filename + ":" + formatInt(result.at.line) + ":" + formatInt(result.at.column) + ": " + result.reason)
 	}

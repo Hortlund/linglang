@@ -11,6 +11,10 @@ type Emitter struct {
 	checked        CheckResult
 	symbols        Map[string, Symbol]
 	cells          Map[string, string]
+	valueLocals    Map[string, bool]
+	values         Map[string, string]
+	straight       bool
+	noOpt          bool
 	referenceTypes Map[int, bool]
 	next           int
 	depth          int
@@ -104,9 +108,13 @@ func emitCell(e *Emitter, node SyntaxNode, declaration bool) string {
 	return name
 }
 
-// Stage one uses the seed's managed-cell backend and lexical GC scopes.
-// No unchecked AST is emitted, and partial modules never escape on errors.
 func emitPackage(files List[SyntaxNode]) EmitResult {
+	return emitPackageWithOptions(files, false)
+}
+
+// Retain the original cell lowering as a semantic oracle. Both modes validate
+// the same checked AST and preserve lexical managed-root scopes.
+func emitPackageWithOptions(files List[SyntaxNode], noOpt bool) EmitResult {
 	var sorted List[SyntaxNode]
 	var seen Map[string, bool]
 	for _, file := range files {
@@ -130,7 +138,7 @@ func emitPackage(files List[SyntaxNode]) EmitResult {
 	if !checked.ok {
 		return EmitResult{reason: checked.reason, at: checked.at}
 	}
-	e := Emitter{checked: checked}
+	e := Emitter{checked: checked, noOpt: noOpt}
 	for _, reference := range checked.bindings.references {
 		e.symbols = put(e.symbols, sourceIdentity(reference.at), reference.symbol)
 	}
@@ -163,6 +171,7 @@ func emitPackage(files List[SyntaxNode]) EmitResult {
 }
 
 func emitFunction(e *Emitter, node SyntaxNode) string {
+	emitAnalyzeLocals(e, node)
 	name := childAt(node, 0)
 	if name.text == "init" || name.text == "_" {
 		emitFail(e, name.at, "init and blank function declarations are unsupported")
@@ -185,7 +194,7 @@ func emitFunction(e *Emitter, node SyntaxNode) string {
 				arg := emitFresh(e)
 				args = append(args, arg)
 				if parameter.text != "_" {
-					setup = append(setup, emitCell(e, parameter, true)+" = "+emitNew(e, emitDefinition(e, parameter).typeID, arg))
+					setup = append(setup, emitDeclareLocal(e, parameter, arg))
 				}
 			}
 		}

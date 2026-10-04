@@ -136,7 +136,7 @@ func emitExpressionInner(e *Emitter, node SyntaxNode, unsigned bool) string {
 		if value.typeID == tNil {
 			return "nil"
 		}
-		return "linglang_rt:read(" + emitCell(e, node, false) + ")"
+		return emitReadLocal(e, node)
 	case "StarExpr":
 		return "linglang_rt:read(" + emitExpression(e, childAt(node, 0), false) + ")"
 	case "SelectorExpr":

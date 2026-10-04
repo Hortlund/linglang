@@ -1,0 +1,138 @@
+package main
+
+// Resolver identities distinguish declarations from shadowed names. Analysis
+// may visit non-variable identifiers, which deliberately have no local key.
+func emitLocalKey(e *Emitter, node SyntaxNode) string {
+	for node.kind == "ParenExpr" {
+		node = childAt(node, 0)
+	}
+	if node.kind != "Ident" {
+		return ""
+	}
+	key := sourceIdentity(node.at)
+	definition := get(e.checked.definitions, key)
+	if definition.ok && (definition.value.kind == "var" || definition.value.kind == "param") {
+		return key
+	}
+	reference := get(e.symbols, key)
+	if reference.ok && (reference.value.kind == "var" || reference.value.kind == "param") {
+		return sourceIdentity(reference.value.at)
+	}
+	return ""
+}
+
+// Only this top-level sequence can change native local versions. Branches,
+// nested scopes and loops retain cell locals until their edges are lowered.
+func emitStraightBody(body SyntaxNode) bool {
+	for _, node := range body.children {
+		switch node.kind {
+		case "AssignStmt":
+			if len(childAt(node, 0).children) != 1 || len(childAt(node, 1).children) != 1 || head(childAt(node, 0).children).value.kind != "Ident" {
+				return false
+			}
+		case "IncDecStmt":
+			if childAt(node, 0).kind != "Ident" {
+				return false
+			}
+		case "DeclStmt":
+			if childAt(node, 0).text != "var" && childAt(node, 0).text != "const" {
+				return false
+			}
+		case "ExprStmt", "ReturnStmt", "EmptyStmt":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func emitAnalyzeLocals(e *Emitter, function SyntaxNode) {
+	e.valueLocals = nil
+	e.values = nil
+	e.straight = !e.noOpt && emitStraightBody(childAt(function, 3))
+	if e.noOpt {
+		return
+	}
+	var candidates List[string]
+	for _, field := range childAt(function, 1).children {
+		for _, name := range childAt(field, 0).children {
+			if name.text != "_" && emitPrimitive(emitDefinition(e, name).typeID) {
+				candidates = prepend(sourceIdentity(name.at), candidates)
+			}
+		}
+	}
+	var addressed Map[string, bool]
+	var changed Map[string, bool]
+	pending := List[SyntaxNode]{childAt(function, 3)}
+	for head(pending).ok {
+		node := head(pending).value
+		pending = tail(pending)
+		if e.straight && node.kind == "Ident" {
+			key := sourceIdentity(node.at)
+			definition := get(e.checked.definitions, key)
+			if definition.ok && definition.value.kind == "var" && emitPrimitive(definition.value.typeID) {
+				candidates = prepend(key, candidates)
+			}
+		}
+		if node.kind == "UnaryExpr" && node.text == "&" {
+			// Conservative over the entire operand: never leave an addressable
+			// primitive in native storage, even on an unreachable branch.
+			operands := node.children
+			for head(operands).ok {
+				operand := head(operands).value
+				operands = tail(operands)
+				key := emitLocalKey(e, operand)
+				if key != "" {
+					addressed = put(addressed, key, true)
+				}
+				for _, child := range operand.children {
+					operands = prepend(child, operands)
+				}
+			}
+		}
+		if node.kind == "AssignStmt" {
+			for _, target := range childAt(node, 0).children {
+				changed = put(changed, emitLocalKey(e, target), true)
+			}
+		} else if node.kind == "IncDecStmt" {
+			changed = put(changed, emitLocalKey(e, childAt(node, 0)), true)
+		} else if node.kind == "RangeStmt" && node.text == "=" {
+			changed = put(changed, emitLocalKey(e, childAt(node, 0)), true)
+			changed = put(changed, emitLocalKey(e, childAt(node, 1)), true)
+		}
+		for _, child := range node.children {
+			pending = prepend(child, pending)
+		}
+	}
+	for _, key := range candidates {
+		if !get(addressed, key).ok && (e.straight || !get(changed, key).ok) {
+			e.valueLocals = put(e.valueLocals, key, true)
+		}
+	}
+}
+
+func emitAssignValue(e *Emitter, key string, value string) string {
+	name := emitFresh(e)
+	e.values = put(e.values, key, name)
+	return name + " = " + value
+}
+
+func emitDeclareLocal(e *Emitter, node SyntaxNode, value string) string {
+	key := sourceIdentity(node.at)
+	if get(e.valueLocals, key).value {
+		return emitAssignValue(e, key, value)
+	}
+	return emitCell(e, node, true) + " = " + emitNew(e, emitDefinition(e, node).typeID, value)
+}
+
+func emitReadLocal(e *Emitter, node SyntaxNode) string {
+	key := emitLocalKey(e, node)
+	if get(e.valueLocals, key).value {
+		value := get(e.values, key)
+		if !value.ok {
+			emitFail(e, node.at, "variable used before emission of its declaration")
+		}
+		return value.value
+	}
+	return "linglang_rt:read(" + emitCell(e, node, false) + ")"
+}

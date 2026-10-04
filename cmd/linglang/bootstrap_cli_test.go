@@ -116,6 +116,15 @@ func main(){p:=node();for i:=0;i<30;i++{_=node()};p.x++;println(p.x,join(args(),
 			if err != nil || legacy != module {
 				t.Fatal("legacy emission differs from directory emit")
 			}
+			cellModule, stderr, err := invoke(cli, "emit", "--no-opt", pkg)
+			if err != nil || cellModule == module {
+				t.Fatalf("cell oracle emission: %v\n%s", err, stderr)
+			}
+			out, stderr, err = invoke(cli, "run", "--no-opt", "--gc-stress", "--gc-stats", pkg, "--", "--no-opt")
+			if err != nil || out != "8 --no-opt\n" {
+				t.Fatalf("cell oracle run or argument forwarding: %q %v\n%s", out, err, stderr)
+			}
+			emitterCleanGC(t, stderr)
 			artifact := filepath.Join(dir, "out", "雪 bean's executable")
 			out, stderr, err = invoke(cli, "build", "--gc-stress", "--gc-stats", "-o", artifact, pkg)
 			if err != nil || !strings.Contains(out, "Built executable in ") {
