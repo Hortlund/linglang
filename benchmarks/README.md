@@ -294,6 +294,25 @@ establish a speedup. The report is `_build/bootstrap-opt/rebuild-comparison.json
 New write/address analysis and binding lookup costs are targets for the next
 compiler optimization, alongside native values across branches and loops.
 
+The binding-analysis follow-up compares the reviewed `11c77c6` compiler with a
+shared variable-identity index, direct reuse of resolved keys for boxed reads,
+and an early exit for complex functions without eligible primitive parameters.
+It preserves complete emitted source for both frozen corpora in both lowering
+modes. Seven fresh measured lexer samples and two warmups per compiler gave
+977.220 -> 948.840 ms median (2.9% faster), 199,957,516 -> 186,116,102 reductions
+(6.9% fewer), and 341,711 -> 334,120 allocations (2.2% fewer). Peak live cells
+remained 412; collections fell from 1,335 to 1,305. Comparisons use the paired
+measurements in this run, rather than timings from the earlier session. The raw
+report is `_build/bootstrap-analysis/lexer-comparison.json`.
+
+A fresh single paired measurement of the full frozen compiler corpus took
+192.178 -> 163.050 s (15.2% faster), with 29,224,055,073 -> 26,733,149,112
+reductions (8.5% fewer), 4,465,948 -> 4,360,235 allocations (2.4% fewer), and
+17,437 -> 17,024 collections. Peak live cells remained 447. Both compilers
+emitted the same 1,215,233 bytes and SHA-256, and every sample finished with zero
+live cells and root entries/frames. This is a local single-pair observation,
+with no CI timing threshold; see `_build/bootstrap-analysis/rebuild-comparison.json`.
+
 The phase harness below measures Go-seeded compiler programs, so its optimized
 versus cell comparison concerns the seed's lowering of the compiler itself.
 

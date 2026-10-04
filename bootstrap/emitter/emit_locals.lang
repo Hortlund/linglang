@@ -9,16 +9,7 @@ func emitLocalKey(e *Emitter, node SyntaxNode) string {
 	if node.kind != "Ident" {
 		return ""
 	}
-	key := sourceIdentity(node.at)
-	definition := get(e.checked.definitions, key)
-	if definition.ok && (definition.value.kind == "var" || definition.value.kind == "param") {
-		return key
-	}
-	reference := get(e.symbols, key)
-	if reference.ok && (reference.value.kind == "var" || reference.value.kind == "param") {
-		return sourceIdentity(reference.value.at)
-	}
-	return ""
+	return get(e.localKeys, sourceIdentity(node.at)).value
 }
 
 // Only this top-level sequence can change native local versions. Branches,
@@ -60,6 +51,11 @@ func emitAnalyzeLocals(e *Emitter, function SyntaxNode) {
 				candidates = prepend(sourceIdentity(name.at), candidates)
 			}
 		}
+	}
+	// Complex bodies can only unbox primitive parameters in this slice. With
+	// no candidates, scanning their locals, writes and addresses changes nothing.
+	if !e.straight && !head(candidates).ok {
+		return
 	}
 	var addressed Map[string, bool]
 	var changed Map[string, bool]
@@ -134,5 +130,12 @@ func emitReadLocal(e *Emitter, node SyntaxNode) string {
 		}
 		return value.value
 	}
-	return "linglang_rt:read(" + emitCell(e, node, false) + ")"
+	// Reuse the resolved key instead of resolving it again through emitCell.
+	cell := get(e.cells, key)
+	if key == "" {
+		emitFail(e, node.at, "bootstrap emitter requires a local variable")
+	} else if !cell.ok {
+		emitFail(e, node.at, "variable used before emission of its declaration")
+	}
+	return "linglang_rt:read(" + cell.value + ")"
 }

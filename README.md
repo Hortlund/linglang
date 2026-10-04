@@ -830,6 +830,18 @@ those constructs, and addressable variables retain managed cells. Formatter,
 test runner, control-flow optimization, and full seed-language coverage still
 need further work.
 
+The binding-analysis follow-up shares resolved variable identities and skips
+scans that cannot select a native local. On the same frozen inputs, fresh paired
+runs improved lexer compilation 2.9% across seven samples and full compiler
+emission 15.2% in one pair; reductions fell 6.9% and 8.5%, respectively.
+Both native and cell modes preserve complete emitted source. The latest B/C/D
+proof agrees on 1,257,860 emitted bytes (SHA-256
+`6d621f5ac59de3d22dab2e3f7abcbd669c41c07429f9552ec6f5bdc8dce14017`),
+with forced-GC execution and clean final cells/roots. See
+[benchmark details](benchmarks/README.md) for measurement boundaries and limits.
+Next: read-only primitive locals in functions with branches or loops, followed
+by a Linglang-written test runner.
+
 Run the full proof explicitly; it stays outside ordinary tests and push CI:
 
 ```sh

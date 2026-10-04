@@ -9,7 +9,7 @@ type EmitResult struct {
 
 type Emitter struct {
 	checked        CheckResult
-	symbols        Map[string, Symbol]
+	localKeys      Map[string, string]
 	cells          Map[string, string]
 	valueLocals    Map[string, bool]
 	values         Map[string, string]
@@ -85,16 +85,16 @@ func emitValue(e *Emitter, node SyntaxNode) CheckedValue {
 }
 
 func emitCell(e *Emitter, node SyntaxNode, declaration bool) string {
-	at := node.at
-	if !declaration {
-		found := get(e.symbols, sourceIdentity(at))
-		if !found.ok || (found.value.kind != "var" && found.value.kind != "param") {
-			emitFail(e, at, "bootstrap emitter requires a local variable")
+	key := ""
+	if declaration {
+		key = sourceIdentity(node.at)
+	} else {
+		key = emitLocalKey(e, node)
+		if key == "" {
+			emitFail(e, node.at, "bootstrap emitter requires a local variable")
 			return ""
 		}
-		at = found.value.at
 	}
-	key := sourceIdentity(at)
 	found := get(e.cells, key)
 	if found.ok {
 		return found.value
@@ -139,8 +139,18 @@ func emitPackageWithOptions(files List[SyntaxNode], noOpt bool) EmitResult {
 		return EmitResult{reason: checked.reason, at: checked.at}
 	}
 	e := Emitter{checked: checked, noOpt: noOpt}
+	// Resolve variable uses to declaration identities once. Analysis, native
+	// reads and cell addresses share this index; constants/functions need none.
+	for _, definition := range checked.bindings.definitions {
+		if definition.kind == "var" || definition.kind == "param" {
+			key := sourceIdentity(definition.at)
+			e.localKeys = put(e.localKeys, key, key)
+		}
+	}
 	for _, reference := range checked.bindings.references {
-		e.symbols = put(e.symbols, sourceIdentity(reference.at), reference.symbol)
+		if reference.symbol.kind == "var" || reference.symbol.kind == "param" {
+			e.localKeys = put(e.localKeys, sourceIdentity(reference.at), sourceIdentity(reference.symbol.at))
+		}
 	}
 	var reversed List[string]
 	mainFound := false
