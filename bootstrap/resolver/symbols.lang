@@ -78,7 +78,7 @@ func useName(r *Resolver, scope *Scope, name SyntaxNode) {
 
 func builtinScope() Scope {
 	var names Map[string, Symbol]
-	for _, name := range (List[string]{"int", "bool", "string", "Pid", "Monitor", "Supervisor", "Process", "ChildOptions", "Child", "Delivery", "Exit", "List", "Map", "TextResult", "IntResult", "IOResult", "RuneResult", "prepend", "head", "tail", "self", "spawn", "spawnMonitor", "send", "receive", "monitor", "wait", "demonitor", "startSupervisor", "supervisorPid", "supervise", "lookupChild", "restartChild", "stopChild", "removeChild", "stopSupervisor", "get", "put", "remove", "readFile", "writeFile", "split", "trim", "parseInt", "formatInt", "args", "assert", "byteAt", "slice", "join", "runeAt", "isLetter", "isDigit", "len", "append", "make", "new", "panic", "print", "println", "true", "false", "nil", "iota"}) {
+	for _, name := range (List[string]{"int", "bool", "string", "Pid", "Monitor", "Supervisor", "Process", "ChildOptions", "Child", "Delivery", "Exit", "List", "Map", "TextResult", "IntResult", "IOResult", "RuneResult", "FilesResult", "sourceFiles", "buildProgram", "runProgram", "prepend", "head", "tail", "self", "spawn", "spawnMonitor", "send", "receive", "monitor", "wait", "demonitor", "startSupervisor", "supervisorPid", "supervise", "lookupChild", "restartChild", "stopChild", "removeChild", "stopSupervisor", "get", "put", "remove", "readFile", "writeFile", "split", "trim", "parseInt", "formatInt", "args", "assert", "byteAt", "slice", "join", "runeAt", "isLetter", "isDigit", "len", "append", "make", "new", "panic", "print", "println", "true", "false", "nil", "iota"}) {
 		names = put(names, name, Symbol{name: name, kind: "builtin"})
 	}
 	return Scope{names: names}

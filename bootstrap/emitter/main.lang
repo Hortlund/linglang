@@ -1,12 +1,72 @@
 package main
 
-func main() {
-	if !head(args()).ok {
-		panic("usage: emitter <source.lang> [source.lang...]")
+type BootstrapOptions struct {
+	command   string
+	output    string
+	paths     List[string]
+	arguments List[string]
+	stress    bool
+	stats     bool
+	help      bool
+}
+
+func bootstrapUsage() string {
+	return "usage: linglang-bootstrap <check|emit|build|run> [options] <source.lang|directory>...\n  build: -o <executable> (default: program.escript)\n  build/run: --gc-stress --gc-stats\n  run: -- <program arguments>\n  source paths without a command retain legacy emit behavior"
+}
+
+func bootstrapOptions(values List[string]) BootstrapOptions {
+	options := BootstrapOptions{command: "emit", output: "program.escript"}
+	first := head(values).value
+	if first == "--help" || first == "-h" {
+		options.help = true
+		return options
 	}
+	if first == "check" || first == "emit" || first == "build" || first == "run" {
+		options.command = first
+		values = tail(values)
+	}
+	for head(values).ok {
+		value := head(values).value
+		values = tail(values)
+		if value == "--" {
+			if options.command != "run" {
+				panic("program arguments require run")
+			}
+			options.arguments = values
+			break
+		}
+		if value == "-o" {
+			if options.command != "build" || !head(values).ok || head(values).value == "" {
+				panic("-o requires build and an output path")
+			}
+			options.output = head(values).value
+			values = tail(values)
+		} else if value == "--gc-stress" || value == "--gc-stats" {
+			if options.command != "build" && options.command != "run" {
+				panic("GC options require build or run")
+			}
+			if value == "--gc-stress" {
+				options.stress = true
+			} else {
+				options.stats = true
+			}
+		} else {
+			if len(value) > 0 && byteAt(value, 0) == 45 {
+				panic("unknown option " + value)
+			}
+			options.paths = append(options.paths, value)
+		}
+	}
+	if !head(options.paths).ok {
+		panic(bootstrapUsage())
+	}
+	return options
+}
+
+func bootstrapParse(filenames List[string]) List[SyntaxNode] {
 	var reversed List[SyntaxNode]
 	var seen Map[string, bool]
-	for _, filename := range args() {
+	for _, filename := range filenames {
 		if get(seen, filename).ok {
 			panic("duplicate source file " + filename)
 		}
@@ -21,9 +81,41 @@ func main() {
 		}
 		reversed = prepend(parsed.root, reversed)
 	}
-	result := emitPackage(syntaxOrder(reversed))
+	return syntaxOrder(reversed)
+}
+
+func main() {
+	options := bootstrapOptions(args())
+	if options.help {
+		println(bootstrapUsage())
+		return
+	}
+	filenames := sourceFiles(options.paths)
+	if !filenames.ok {
+		panic(filenames.reason)
+	}
+	files := bootstrapParse(filenames.value)
+	result := emitPackage(files)
 	if !result.ok {
 		panic(result.at.filename + ":" + formatInt(result.at.line) + ":" + formatInt(result.at.column) + ": " + result.reason)
 	}
-	print(result.module)
+	// Check the same supported program subset as build/run, including return
+	// flow and entry-point validation, while withholding the emitted module.
+	if options.command == "check" {
+		return
+	}
+	if options.command == "emit" {
+		print(result.module)
+	} else if options.command == "build" {
+		built := buildProgram(result.module, options.output, filenames.value, options.stress, options.stats)
+		if !built.ok {
+			panic(built.reason)
+		}
+		println("Built executable in " + options.output)
+	} else {
+		ran := runProgram(result.module, options.arguments, options.stress, options.stats)
+		if !ran.ok {
+			panic(ran.reason)
+		}
+	}
 }

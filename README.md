@@ -793,13 +793,13 @@ Erlang/OTP. source goes through the linglang lexer, parser, resolver, type check
 and emitter. the existing runtime still handles managed cells and GC scopes.
 no Go sneaking into the compilation step wearing a fake moustache.
 
-pass explicit source files from one package. functions, recursion, primitive
+pass source files or directories from one package. functions, recursion, primitive
 `int`/`bool`/`string` variables, structs, pointers, constants, arithmetic, bitwise
 operations, direct calls, returns, blocks, `if`/`else`, `switch`, and `for` loops work.
 nested loops and switches, `break`, `continue`, and returns use the existing
 BEAM runtime. switch tags evaluate once; cases run in order and stop at the first
 match. printing, `len`, `formatInt`, `trim`, `byteAt`, `slice`, `join`,
-`split`, `args`, `readFile`, `runeAt`, `isLetter`, `isDigit`, `assert`, and string `panic` work too.
+`split`, `args`, `readFile`, `writeFile`, `runeAt`, `isLetter`, `isDigit`, `assert`, and string `panic` work too.
 
 struct literals use named fields. struct assignment copies values; pointer
 assignment keeps aliases. `&`, `*`, field updates, returned locals, interior
@@ -822,14 +822,55 @@ after the initial Go seed. A builds B; B rebuilds C with byte-identical emitted
 compiler source. The opt-in proof also compiles C and checks execution, source
 diagnostics, and GC cleanup. On the local macOS ARM64 / OTP 29 run, B rebuilt C
 in about three minutes after type-aware tracing removed repeated scans of
-pointer-free AST/metadata values. The CLI, formatter, test runner, and full
-seed-language coverage still need further work.
+pointer-free AST/metadata values. A minimal Linglang-written CLI now supports
+`check`, `emit`, `build`, and `run`. Formatter, test runner, optimized bootstrap
+lowering, and full seed-language coverage still need further work.
 
 Run the full proof explicitly; it stays outside ordinary tests and push CI:
 
 ```sh
 LINGLANG_SELFHOST=1 go test ./cmd/linglang -run '^TestBootstrapSelfHostProof$' -count=1 -timeout=20m -v
 ```
+
+Preserve the self-built C compiler as an executable with:
+
+```sh
+LINGLANG_SELFHOST=1 LINGLANG_SELFHOST_OUT="$PWD/bin/linglang-bootstrap" go test ./cmd/linglang -run '^TestBootstrapSelfHostProof$' -count=1 -timeout=20m -v
+```
+
+After that initial seed, these commands use Erlang/OTP without Go or `erlc` on
+PATH. The compiler packages the program and its runtime into a movable escript:
+
+```sh
+./bin/linglang-bootstrap check examples/bootstrap_demo
+./bin/linglang-bootstrap emit examples/bootstrap_demo > _build/demo.erl
+./bin/linglang-bootstrap build -o bin/bootstrap-demo examples/bootstrap_demo
+./bin/bootstrap-demo
+./bin/linglang-bootstrap run --gc-stress --gc-stats examples/bootstrap_collections.lang
+./bin/linglang-bootstrap run examples/bootstrap_loops.lang -- "program argument"
+./bin/linglang-bootstrap build -o bin/linglang-bootstrap-next bootstrap/emitter
+```
+
+`check` validates the same supported program subset as `build` and `run`, including
+entry points and return flow, and prints no module. Directory inputs include
+immediate `.lang` files in filename order, follow source-file symlinks, and exclude
+`_test.lang` files and nested directories. Multiple paths form one package.
+`build` defaults to `program.escript`; `-o` selects the output. It creates parent
+directories and publishes only a complete executable, refusing source-file
+outputs including symlink and hard-link aliases. `--gc-stress` and `--gc-stats`
+apply to the built/run program. `run` passes arguments after `--` and executes
+the program in a separate VM with inherited stdio, preserving the compiler's
+modules and managed heap. Piped input and EOF reach the program directly.
+Interrupting the compiler also stops the program and removes its temporary
+executable, including when the program is waiting for stdin.
+Passing paths without a command retains the original emitter behavior.
+
+The driver uses three typed OTP helpers: `sourceFiles(paths)` returns
+`FilesResult{value List[string], ok bool, reason string}`;
+`buildProgram(erlangSource, output, inputs, stress, stats)` returns `IOResult`;
+`runProgram(erlangSource, arguments, stress, stats)` returns `IOResult`.
+The latter two accept the emitter's Erlang module text. Parsing, checking, and
+language code generation stay in Linglang; OTP compiles and packages BEAM.
 
 it can compile the lexer now. after the runtime setup above, these steps use only
 Erlang/OTP:

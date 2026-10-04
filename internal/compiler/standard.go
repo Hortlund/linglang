@@ -12,6 +12,10 @@ type TextResult struct { value string; ok bool; reason string }
 type IntResult struct { value int; ok bool; reason string }
 type IOResult struct { ok bool; reason string }
 type RuneResult struct { value int; width int; ok bool }
+type FilesResult struct { value List[string]; ok bool; reason string }
+func sourceFiles(paths List[string]) FilesResult { return FilesResult{} }
+func buildProgram(source string, path string, inputs List[string], stress bool, stats bool) IOResult { return IOResult{} }
+func runProgram(source string, arguments List[string], stress bool, stats bool) IOResult { return IOResult{} }
 func readFile(path string) TextResult { return TextResult{} }
 func writeFile(path string, text string) IOResult { return IOResult{} }
 func split(text string, separator string) List[string] { return nil }
@@ -44,6 +48,7 @@ func (c *compiler) standardCall(call *ast.CallExpr) (string, bool, error) {
 		}), true, nil
 	}
 	operation := map[string]string{
+		"sourceFiles": "source_files", "buildProgram": "build_program", "runProgram": "run_program",
 		"readFile": "read_file", "writeFile": "write_file",
 		"split": "text_split", "trim": "text_trim",
 		"parseInt": "parse_int", "formatInt": "format_int", "args": "arguments",

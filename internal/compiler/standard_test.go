@@ -102,3 +102,32 @@ func TestStandardResultsCrossProcessBoundary(t *testing.T) {
 		t.Fatalf("got %q (%v)", got, err)
 	}
 }
+
+func TestBootstrapBuildFailurePreservesOutput(t *testing.T) {
+	dir := t.TempDir()
+	output := filepath.Join(dir, "existing executable")
+	if err := os.WriteFile(output, []byte("previous executable"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	source := fmt.Sprintf(`func main(){
+ failed:=buildProgram("not Erlang",%s,nil,false,false)
+ println(failed.ok,readFile(%s).value)
+ wrong:=buildProgram("-module(wrong).\\n-export([main/0]).\\nmain()->ok.",%s,nil,false,false)
+ println(wrong.ok,wrong.reason)
+}`, strconv.Quote(output), strconv.Quote(output), strconv.Quote(output))
+	// Feed actual newlines to the Erlang scanner rather than source escapes.
+	source = strings.ReplaceAll(source, `\\n`, `\n`)
+	got, err := execute(t, source)
+	want := "false previous executable\nfalse expected module linglang_program, got wrong\n"
+	if err != nil || got != want {
+		t.Fatalf("build failure: %q %v, want %q", got, err, want)
+	}
+	contents, err := os.ReadFile(output)
+	if err != nil || string(contents) != "previous executable" {
+		t.Fatalf("existing executable changed: %q %v", contents, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("temporary build files leaked: %v %v", entries, err)
+	}
+}

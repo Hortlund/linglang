@@ -107,6 +107,32 @@ func TestBootstrapSelfHostProof(t *testing.T) {
 	t.Logf("B -> C: %s", time.Since(started))
 	cDir := compile("c", c)
 	t.Logf("B/C exact output: %d bytes, SHA-256 %x", len(c), sha256.Sum256([]byte(c)))
+	// Package the self-built C source through OTP itself. An optional destination
+	// preserves the actual compiler executable after the temporary proof ends.
+	artifact := os.Getenv("LINGLANG_SELFHOST_OUT")
+	if artifact == "" {
+		artifact = filepath.Join(dir, "compiler-c")
+	} else {
+		artifact, err = filepath.Abs(artifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	packing := strings.Replace(bootstrapPackingScript, "false, true)", "false, false)", 1)
+	packingArgs := []string{"+S", "1", "-noshell", "-pa", cDir, "-eval", packing, "-extra", filepath.Join(cDir, "linglang_program.erl"), artifact}
+	if out, stderr, err := invoke(filepath.Join(otp, "erl"), append(packingArgs, paths...)...); err != nil {
+		t.Fatalf("package C: %v\n%s\n%s", err, out, stderr)
+	}
+	t.Logf("Self-built C executable: %s", artifact)
+	t.Run("cli_stdin", func(t *testing.T) {
+		testBootstrapStdin(t, artifact, env)
+	})
+	t.Run("cli_concurrent_builds", func(t *testing.T) {
+		testBootstrapConcurrentBuilds(t, artifact, env)
+	})
+	t.Run("cli_run_lifetime", func(t *testing.T) {
+		testBootstrapRunLifetime(t, artifact, env)
+	})
 	for _, f := range []struct{ name, code, want string }{
 		{"control_and_collections", `func main(){total:=0;for _,n:=range (List[int]{1,2,3}){switch n{case 2:continue;default:m:=Map[int,int]{n:n*2};total+=get(m,n).value;break}};println(total)}`, "8\n"},
 		{"escaped_pointer", `type N struct{x int};func node()*N{n:=N{x:7};return &n};func main(){p:=node();for i:=0;i<30;i++{_=node()};switch p.x{case 7:p.x++;default:panic("wrong")};println(p.x)}`, "8\n"},
@@ -118,13 +144,31 @@ func TestBootstrapSelfHostProof(t *testing.T) {
 			if err := os.WriteFile(path, code, 0600); err != nil {
 				t.Fatal(err)
 			}
+			if out, stderr, err := invoke(artifact, "check", path); err != nil || out != "" {
+				t.Fatalf("C check: %v\n%s\n%s", err, out, stderr)
+			}
 			module, stderr, err := run(cDir, false, path)
 			if err != nil {
 				t.Fatalf("C emission: %v\n%s", err, stderr)
 			}
 			emitterCleanGC(t, stderr)
+			// Exercise the usable self-built driver as well as raw module emission.
+			packed := filepath.Join(dir, f.name+"-packed")
+			if out, stderr, err := invoke(artifact, "build", "--gc-stress", "--gc-stats", "-o", packed, path); err != nil || !strings.Contains(out, "Built executable in ") {
+				t.Fatalf("C build: %v\n%s\n%s", err, out, stderr)
+			}
+			out, stderr, err := invoke(packed)
+			if err != nil || out != f.want {
+				t.Fatalf("C packed execution: %q %v\n%s", out, err, stderr)
+			}
+			emitterCleanGC(t, stderr)
+			out, stderr, err = invoke(artifact, "run", "--gc-stress", "--gc-stats", path)
+			if err != nil || out != f.want {
+				t.Fatalf("C run: %q %v\n%s", out, err, stderr)
+			}
+			emitterCleanGC(t, stderr)
 			generated := compile(f.name, module)
-			out, stderr, err := run(generated, true)
+			out, stderr, err = run(generated, true)
 			if err != nil || out != f.want {
 				t.Fatalf("C execution: %q (%v), want %q\n%s", out, err, f.want, stderr)
 			}

@@ -1,5 +1,17 @@
 package main
 
+func TestBootstrapOptions() {
+	legacy := bootstrapOptions(List[string]{"main.lang"})
+	assert(legacy.command == "emit" && head(legacy.paths).value == "main.lang")
+	assert(bootstrapOptions(List[string]{"--help"}).help)
+	built := bootstrapOptions(List[string]{"build", "--gc-stress", "--gc-stats", "-o", "snow bean", "source"})
+	assert(built.command == "build" && built.output == "snow bean" && built.stress && built.stats)
+	assert(len(built.paths) == 1 && head(built.paths).value == "source")
+	ran := bootstrapOptions(List[string]{"run", "source", "--", "", "-flag", "snow 雪"})
+	assert(ran.command == "run" && len(ran.arguments) == 3)
+	assert(head(ran.arguments).value == "" && head(tail(ran.arguments)).value == "-flag")
+}
+
 func TestCheckedMetadata() {
 	parsed := parse("metadata.lang", "package main\nfunc add(n int)int{x:=n+1+2+3;return x};func main(){println(add(4))}")
 	assert(parsed.ok)

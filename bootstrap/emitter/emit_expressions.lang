@@ -267,6 +267,14 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 			target = "linglang_rt:arguments"
 		case "readFile":
 			target = "linglang_rt:read_file"
+		case "writeFile":
+			target = "linglang_rt:write_file"
+		case "sourceFiles":
+			target = "linglang_rt:source_files"
+		case "buildProgram":
+			target = "linglang_rt:build_program"
+		case "runProgram":
+			target = "linglang_rt:run_program"
 		case "runeAt":
 			target = "linglang_rt:text_rune"
 		case "join":

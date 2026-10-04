@@ -12,7 +12,7 @@ func nativeTypes(c *Checker, scope *TypeScope) {
 		bindType(scope, name, "generic", tInvalid)
 	}
 	// Native records use exactly the same struct checker as user declarations.
-	parsed := parse("<native>", "package main\ntype Process struct { pid Pid; monitor Monitor }; type ChildOptions struct { restart string; shutdownMillis int }; type Child struct { pid Pid; ok bool; reason string }; type Exit struct { pid Pid; ok bool; normal bool; reason string }; type TextResult struct { value string; ok bool; reason string }; type IntResult struct { value int; ok bool; reason string }; type IOResult struct { ok bool; reason string }; type RuneResult struct { value int; width int; ok bool }")
+	parsed := parse("<native>", "package main\ntype Process struct { pid Pid; monitor Monitor }; type ChildOptions struct { restart string; shutdownMillis int }; type Child struct { pid Pid; ok bool; reason string }; type Exit struct { pid Pid; ok bool; normal bool; reason string }; type TextResult struct { value string; ok bool; reason string }; type IntResult struct { value int; ok bool; reason string }; type IOResult struct { ok bool; reason string }; type RuneResult struct { value int; width int; ok bool }; type FilesResult struct { value List[string]; ok bool; reason string }")
 	assert(parsed.ok)
 	registerTypes(c, scope, tail(parsed.root.children))
 	completeTypes(c, scope, tail(parsed.root.children))
@@ -38,6 +38,11 @@ func nativeFunctions(c *Checker, scope *TypeScope) {
 	nativeFunction(c, scope, "stopSupervisor", List[int]{supervisor}, tBool)
 	nativeFunction(c, scope, "readFile", List[int]{tString}, typedName(scope, "TextResult").value.typeID)
 	nativeFunction(c, scope, "writeFile", List[int]{tString, tString}, typedName(scope, "IOResult").value.typeID)
+	stringsType := compoundType(c, "list", 0, tString)
+	ioType := typedName(scope, "IOResult").value.typeID
+	nativeFunction(c, scope, "sourceFiles", List[int]{stringsType}, typedName(scope, "FilesResult").value.typeID)
+	nativeFunction(c, scope, "buildProgram", List[int]{tString, tString, stringsType, tBool, tBool}, ioType)
+	nativeFunction(c, scope, "runProgram", List[int]{tString, stringsType, tBool, tBool}, ioType)
 	nativeFunction(c, scope, "split", List[int]{tString, tString}, compoundType(c, "list", 0, tString))
 	nativeFunction(c, scope, "trim", List[int]{tString}, tString)
 	nativeFunction(c, scope, "parseInt", List[int]{tString}, typedName(scope, "IntResult").value.typeID)
