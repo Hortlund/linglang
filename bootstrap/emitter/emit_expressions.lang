@@ -79,14 +79,15 @@ func emitConstant(e *Emitter, node SyntaxNode, value ConstantValue) string {
 	return ""
 }
 
-// Every operand is evaluated once, in source order, with a temporary root.
-func emitOrdered(e *Emitter, codes List[string], target string) string {
+// Every operand is evaluated once, in source order. Only values whose static
+// type can contain managed handles need temporary roots.
+func emitOrdered(e *Emitter, codes List[string], ids List[int], target string) string {
 	var setup List[string]
 	var values List[string]
 	for _, code := range codes {
 		value := emitFresh(e)
-		setup = append(setup, value+" = "+code)
-		setup = append(setup, "linglang_rt:keep("+value+")")
+		setup = append(setup, value+" = "+emitKeep(e, head(ids).value, code))
+		ids = tail(ids)
 		values = append(values, value)
 	}
 	if len(target) >= 4 && slice(target, 0, 4) == "fun(" {
@@ -179,7 +180,7 @@ func emitExpressionInner(e *Emitter, node SyntaxNode, unsigned bool) string {
 		if unsigned && (node.text == "/" || node.text == "%" || node.text == ">>") {
 			op += "_unsigned"
 		}
-		return emitOrdered(e, List[string]{left, right}, "fun(A, B) -> linglang_rt:binary("+op+", A, B) end")
+		return emitOrdered(e, List[string]{left, right}, List[int]{emitValue(e, childAt(node, 0)).typeID, emitValue(e, childAt(node, 1)).typeID}, "fun(A, B) -> linglang_rt:binary("+op+", A, B) end")
 	case "CallExpr":
 		return emitCall(e, node)
 	}
@@ -207,6 +208,7 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 		return ""
 	}
 	var codes List[string]
+	ids := emitArgumentTypes(e, node)
 	for _, argument := range tail(node.children) {
 		codes = append(codes, emitExpression(e, argument, false))
 	}
@@ -218,10 +220,10 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 		return ""
 	}
 	if function.kind == "func" {
-		return emitOrdered(e, codes, emitFunctionName(callee.text))
+		return emitOrdered(e, codes, ids, emitFunctionName(callee.text))
 	}
 	if collection {
-		return emitCollectionCall(e, node, function.name, codes)
+		return emitCollectionCall(e, node, function.name, codes, ids)
 	}
 	if function.kind == "intrinsic" {
 		switch function.name {
@@ -235,8 +237,8 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 			var values List[string]
 			for _, code := range codes {
 				name := emitFresh(e)
-				setup = append(setup, name+" = "+code)
-				setup = append(setup, "linglang_rt:keep("+name+")")
+				setup = append(setup, name+" = "+emitKeep(e, head(ids).value, code))
+				ids = tail(ids)
 				values = append(values, name)
 			}
 			setup = append(setup, "linglang_rt:print(["+join(values, ", ")+"], "+newline+")")
@@ -247,14 +249,14 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 			}
 			return "erlang:error({linglang_panic, " + head(codes).value + "})"
 		case "append":
-			return emitAppend(e, node, codes)
+			return emitAppend(e, node, codes, ids)
 		case "len":
 			if defaultType(emitValue(e, childAt(node, 1)).typeID) == tString {
-				return emitOrdered(e, codes, "byte_size")
+				return emitOrdered(e, codes, ids, "byte_size")
 			}
 			kind := get(e.checked.types, emitValue(e, childAt(node, 1)).typeID).value.kind
 			if kind == "list" || kind == "map" {
-				return emitOrdered(e, codes, "linglang_rt:"+kind+"_length")
+				return emitOrdered(e, codes, ids, "linglang_rt:"+kind+"_length")
 			}
 		}
 	}
@@ -286,10 +288,11 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 		case "assert":
 			codes = append(codes, emitBinaryString(node.at.filename))
 			codes = append(codes, formatInt(node.at.line))
+			ids = append(append(ids, tString), tInt)
 			target = "linglang_rt:assert_value"
 		}
 		if target != "" {
-			return emitOrdered(e, codes, target)
+			return emitOrdered(e, codes, ids, target)
 		}
 	}
 	emitFail(e, node.at, "bootstrap emitter does not support call "+callee.text)

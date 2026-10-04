@@ -102,7 +102,54 @@ use `go_allocations` and `go_allocated_bytes` instead. Runtime versions and
 unavailable; running the command with `-compare` requires it and fails clearly
 if it is missing.
 
-### Four-language local results
+### Current four-language local results — 2026-10-04
+
+The current working tree, including leaf-call optimization and type-aware cell
+tracing, was measured twice on the same Apple M4 Pro / macOS ARM64 machine,
+OTP 29 / ERTS 17.1 with the JIT, Elixir 1.20.4, and Go 1.27.1. Each suite used
+one BEAM scheduler, `GOMAXPROCS=1`, three warmups, and 21 measured samples per
+workload/language. All 1,344 measured runs passed result and applicable managed
+cleanup checks. Both reports have source fingerprint
+`6b9c59dfbf4626b3e603c2032788de1ceca02d631bf72734531183abe1a0c80d`.
+
+The second suite (`2026-10-04T15:11:49Z`) produced these median elapsed milliseconds:
+
+| Workload | linglang (optimized) | Erlang | Elixir | Go |
+| --- | ---: | ---: | ---: | ---: |
+| arithmetic | 5.353 | 4.218 | 4.224 | 0.027 |
+| calls | 11.275 | 3.946 | 3.891 | 0.023 |
+| structs | 8.634 | 7.539 | 7.337 | 0.022 |
+| pointers | 82.046 | 4.898 | 5.258 | 0.023 |
+| lists | 4.147 | 0.972 | 0.971 | 0.132 |
+| maps | 6.210 | 3.304 | 3.291 | 0.355 |
+| strings | 13.068 | 43.227 | 42.992 | 0.791 |
+| messages | 26.663 | 16.565 | 16.540 | 1.496 |
+
+The first suite (`2026-10-04T15:11:26Z`) measured linglang pointers at 81.274 ms;
+the repeat was within 1%. Arithmetic varied more: linglang 6.578 -> 5.353 ms,
+Erlang 4.817 -> 4.218 ms, and Elixir 4.825 -> 4.224 ms. Background desktop/system
+activity was present, although no tests or other repository benchmarks ran
+concurrently. Treat small differences from historical runs cautiously; this is
+local repeatability evidence, not a controlled attribution experiment.
+
+The pointer median is about 41% below the older full-suite result of 138.133 ms,
+which predates leaf-call optimization. The earlier isolated post-leaf result was
+85.551 ms. These new runs do not isolate the effect of tracing; its compiler-phase
+measurements are recorded below. Pointers still take roughly 17 times the Erlang
+value-threading reference. Other reference implementation differences, including
+native Go inlining/mutable maps and specialized linglang string helpers, still
+apply. Only the pointer workload allocates a managed cell (one per run).
+
+Raw samples, p95 values, counters and environment metadata are preserved in
+`_build/benchmarks/four-languages-tracing-2026-10-04.json` and
+`_build/benchmarks/four-languages-tracing-2026-10-04-repeat.json` (ignored by Git).
+The original `four-languages.json` remains unchanged. Reproduce with:
+
+```sh
+go run ./cmd/bench -compare -samples 21 -warmup 3 -out _build/benchmarks/four-languages-next.json
+```
+
+### Previous four-language local results
 
 Apple M4 Pro, macOS ARM64, OTP 29 / ERTS 17.1 with the JIT, Elixir 1.20.4,
 and Go 1.27.1. One BEAM scheduler and `GOMAXPROCS=1`. Run timestamp:
@@ -291,3 +338,45 @@ Reports: `_build/benchmarks/frontend-operators-before.json` and
 `frontend-operators-after.json`. Separate tracing reports are
 `profile-lex-before.txt`, `profile-lex-after.txt`, `profile-parse-before.txt`, and
 `profile-parse-after.txt` in the same directory.
+
+
+### Type-aware managed-cell tracing and compiler rebuild
+
+The collector previously revisited pointer-free AST and metadata values held
+in cells and temporary root frames. Both compilers now mark pointer-free cell
+contents and list the pointer-containing fields of structs. Cell identities
+remain rooted; writes and loop cloning preserve the tracing descriptor. The
+bootstrap emitter also omits pointer-free temporary roots. Descriptors live
+separately from values so the ordinary cell read/write paths stay unchanged.
+
+Uninstrumented macOS ARM64 / OTP 29 runs used the same corpus paths and bytes,
+three samples and one warmup per backend, with no concurrent heavy tests:
+
+| Entry point | Optimized before / after (ms) | Cells before / after (ms) |
+| --- | ---: | ---: |
+| lex | 105.668 / 107.070 | 366.700 / 322.595 |
+| parse | 134.205 / 133.841 | 549.397 / 427.087 |
+| resolve | 10.597 / 10.801 | 383.848 / 98.532 |
+| check | 43.295 / 44.898 | 1818.222 / 504.858 |
+| emit | 9.979 / 9.343 | 49.698 / 41.165 |
+
+Cell-backend resolve and check improved about 74% and 72%. Checker reductions
+fell from 832.63M to 177.20M, with the same 96,764 managed allocations, 428 peak
+cells, and 377 collections. This targets traversal cost rather than collector
+frequency or cell allocation. Emission now performs additional static type
+classification (17,756 -> 18,205 cell allocations in this corpus). Optimized
+latencies were mostly flat; these small local samples do not establish a global
+speedup or a performance threshold.
+
+The opt-in A -> B -> C proof now passes: B rebuilt C in 185.729 seconds and emitted
+exactly the same 1,202,577 bytes. C was compiled and checked against seed execution
+under forced GC and against A's source diagnostics, with clean final roots/cells.
+The rebuild timing is one local run with other correctness checks running during
+part of it; it is separate from the isolated frontend measurements above. The
+previous ten-minute deadline was exceeded, so there is no completed before-run
+rebuild timing to compare.
+
+Reports: `_build/benchmarks/frontend-tracing-before.json` and
+`frontend-tracing-final.json`. An intermediate paired-metadata layout is preserved
+in `frontend-tracing-paired.json`; the final layout restored the cell read/write
+fast path. The successful full proof log is `_build/selfhost/proof-tracing-final.txt`.

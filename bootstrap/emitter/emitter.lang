@@ -8,16 +8,17 @@ type EmitResult struct {
 }
 
 type Emitter struct {
-	checked CheckResult
-	symbols Map[string, Symbol]
-	cells   Map[string, string]
-	next    int
-	depth   int
-	ret     string
-	loops   List[string]
-	breaks  List[string]
-	reason  string
-	at      Token
+	checked        CheckResult
+	symbols        Map[string, Symbol]
+	cells          Map[string, string]
+	referenceTypes Map[int, bool]
+	next           int
+	depth          int
+	ret            string
+	loops          List[string]
+	breaks         List[string]
+	reason         string
+	at             Token
 }
 
 func emitFail(e *Emitter, at Token, reason string) {
@@ -184,7 +185,7 @@ func emitFunction(e *Emitter, node SyntaxNode) string {
 				arg := emitFresh(e)
 				args = append(args, arg)
 				if parameter.text != "_" {
-					setup = append(setup, emitCell(e, parameter, true)+" = linglang_rt:new("+arg+")")
+					setup = append(setup, emitCell(e, parameter, true)+" = "+emitNew(e, emitDefinition(e, parameter).typeID, arg))
 				}
 			}
 		}

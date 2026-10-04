@@ -185,3 +185,32 @@ func TestMapKeyBindings() {
 	assert(count == 3 && fields == 1)
 	assert(emitPackage(List[SyntaxNode]{parsed.root}).ok)
 }
+
+// Recursive pointer-free containers remain values, while pointers reachable
+// through a recursive type graph must be found regardless of cache order.
+func TestEmitterReferenceTypes() {
+	parsed := parse("roots.lang", "package main\ntype V struct{children List[V];data Map[string,List[V]]};type A struct{bs List[B]};type B struct{as List[A];p *int};func main(){var v V;var a A;var b B;println(v,a,b)}")
+	assert(parsed.ok)
+	checked := checkPackageInfo(List[SyntaxNode]{parsed.root}, true)
+	assert(checked.ok)
+	e := Emitter{checked: checked}
+	count := 0
+	for id := tVoid + 1; id <= len(checked.types); id++ {
+		t := get(checked.types, id).value
+		if t.name == "V" {
+			count++
+			assert(!emitReferences(&e, id))
+		}
+		if t.name == "A" || t.name == "B" {
+			count++
+			assert(emitReferences(&e, id))
+		}
+	}
+	for id := tVoid + 1; id <= len(checked.types); id++ {
+		t := get(checked.types, id).value
+		if t.name == "A" || t.name == "B" {
+			assert(emitReferences(&e, id))
+		}
+	}
+	assert(count == 3 && emitReferences(&e, tInvalid))
+}

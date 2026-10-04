@@ -283,3 +283,49 @@ func main() {
 		t.Fatalf("temporary scopes: %v\n%s", err, got)
 	}
 }
+
+// Static pointer-free cell contents may be large immutable values. Collection
+// must retain the cell and interior handles without walking those contents.
+func TestGCPointerFreeCellTracing(t *testing.T) {
+	script := `
+{module, linglang_rt} = code:ensure_loaded(linglang_rt),
+1 = erlang:trace_pattern({linglang_rt, references, 2}, true, [call_count]),
+linglang_rt:scope(fun() ->
+ P = linglang_rt:new(#{n => 1, items => lists:seq(1, 10000)}, false),
+ Q = linglang_rt:field(P, n),
+ linglang_rt:write(Q, 7),
+ linglang_rt:collect(),
+ 7 = linglang_rt:read(Q),
+ #{live_cells := 1, root_entries := 1} = linglang_rt:stats(),
+ {call_count, Calls} = erlang:trace_info({linglang_rt, references, 2}, call_count),
+ true = Calls > 0 andalso Calls < 50,
+ %% A normally traced parent must retain a pointer-free child after the child's
+ %% allocation frame closes. Overwriting that edge must then reclaim the child.
+ Parent = linglang_rt:new(#{child => nil, items => lists:seq(1, 10000)}, {fields, [child]}),
+ Child = linglang_rt:scope(fun() ->
+  C = linglang_rt:new(#{n => 9}, false),
+  linglang_rt:write(linglang_rt:field(Parent, child), C),
+  C
+ end),
+ linglang_rt:collect(),
+ #{live_cells := 3} = linglang_rt:stats(),
+ #{n := 9} = linglang_rt:read(Child),
+ linglang_rt:write(linglang_rt:field(Parent, child), nil),
+ linglang_rt:collect(),
+ #{live_cells := 2} = linglang_rt:stats(),
+ {call_count, FieldCalls} = erlang:trace_info({linglang_rt, references, 2}, call_count),
+ true = FieldCalls > Calls andalso FieldCalls < 100,
+ try linglang_rt:read(Child), error(stale_child_survived)
+ catch error:linglang_invalid_pointer -> ok end
+end),
+linglang_rt:collect(),
+#{live_cells := 0, root_frames := 0, root_entries := 0} = linglang_rt:stats(),
+[] = [K || {{linglang_cell, _} = K, _} <- get()],
+[] = [K || {{linglang_cell_trace, _} = K, _} <- get()],
+erlang:trace_pattern({linglang_rt, references, 2}, false, [call_count]),
+io:format("ok~n"), halt(0).`
+	got, err := executeScript(t, "func main() {}", script)
+	if err != nil || got != "ok\n" {
+		t.Fatalf("pointer-free cell tracing: %v\n%s", err, got)
+	}
+}

@@ -19,8 +19,7 @@ func emitCollection(e *Emitter, node SyntaxNode, id int) string {
 		var pair List[string]
 		for _, operand := range operands {
 			name := emitFresh(e)
-			setup = prepend(name+" = "+emitExpression(e, operand, false), setup)
-			setup = prepend("linglang_rt:keep("+name+")", setup)
+			setup = prepend(name+" = "+emitKeep(e, emitValue(e, operand).typeID, emitExpression(e, operand, false)), setup)
 			pair = append(pair, name)
 		}
 		item := head(pair).value
@@ -45,18 +44,18 @@ func emitCollection(e *Emitter, node SyntaxNode, id int) string {
 	return "(begin " + join(ordered, ", ") + " end)"
 }
 
-func emitAppend(e *Emitter, node SyntaxNode, codes List[string]) string {
+func emitAppend(e *Emitter, node SyntaxNode, codes List[string], ids List[int]) string {
 	if node.text == "..." {
-		return emitOrdered(e, codes, "linglang_rt:list_append")
+		return emitOrdered(e, codes, ids, "linglang_rt:list_append")
 	}
 	var names List[string]
 	for range codes {
 		names = append(names, emitFresh(e))
 	}
-	return emitOrdered(e, codes, "fun("+join(names, ", ")+") -> linglang_rt:list_append("+head(names).value+", ["+join(tail(names), ", ")+"]) end")
+	return emitOrdered(e, codes, ids, "fun("+join(names, ", ")+") -> linglang_rt:list_append("+head(names).value+", ["+join(tail(names), ", ")+"]) end")
 }
 
-func emitCollectionCall(e *Emitter, node SyntaxNode, name string, codes List[string]) string {
+func emitCollectionCall(e *Emitter, node SyntaxNode, name string, codes List[string], ids List[int]) string {
 	result := emitValue(e, node).typeID
 	emitRequireType(e, result, node.at)
 	for _, argument := range tail(node.children) {
@@ -71,8 +70,9 @@ func emitCollectionCall(e *Emitter, node SyntaxNode, name string, codes List[str
 	}
 	if name == "head" || name == "get" {
 		codes = append(codes, emitZero(e, get(e.checked.types, result).value.elem, node.at))
+		ids = append(ids, get(e.checked.types, result).value.elem)
 	}
-	return emitOrdered(e, codes, target)
+	return emitOrdered(e, codes, ids, target)
 }
 
 // The remainder cell owns an immutable snapshot of the source list. Declared
@@ -87,11 +87,11 @@ func emitRange(e *Emitter, node SyntaxNode) string {
 	}
 	emitRequireType(e, id, sequence.at)
 	rest := emitFresh(e)
-	setup := rest + " = linglang_rt:new(" + emitScope(emitExpression(e, sequence, false)) + ")"
+	setup := rest + " = " + emitNew(e, id, emitScope(emitExpression(e, sequence, false)))
 	index := ""
 	if childAt(node, 0).kind != "nil" && childAt(node, 0).text != "_" {
 		index = emitFresh(e)
-		setup += ", " + index + " = linglang_rt:new(0)"
+		setup += ", " + index + " = " + emitNew(e, tInt, "0")
 	}
 	var bindings List[string]
 	position := 0
@@ -107,7 +107,7 @@ func emitRange(e *Emitter, node SyntaxNode) string {
 			}
 			if node.text == ":=" {
 				emitRequireType(e, emitDefinition(e, name).typeID, name.at)
-				bindings = append(bindings, emitCell(e, name, true)+" = linglang_rt:new("+value+")")
+				bindings = append(bindings, emitCell(e, name, true)+" = "+emitNew(e, emitDefinition(e, name).typeID, value))
 			} else {
 				bindings = append(bindings, "linglang_rt:write("+emitCell(e, name, false)+", "+value+")")
 			}

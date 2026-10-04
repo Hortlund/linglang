@@ -1,6 +1,6 @@
 %% Process-local managed cells with explicit roots and safe-point collection.
 -module(linglang_rt).
--export([new/1, read/1, write/2, field/2, field_value/2, deref/1,
+-export([new/1, new/2, read/1, write/2, field/2, field_value/2, deref/1,
          binary/3, print/2, loop/4, loop_cell/5,
          list_length/1, list_append/2, list_prepend/2, list_head/2,
          list_tail/1, list_first/1, list_more/1,
@@ -175,13 +175,26 @@ roots(Values) ->
     put({linglang_gc, frames}, [Values | Rest]),
     ok.
 
-new(Value) ->
+%% The compiler may omit tracing only for statically pointer-free values.
+%% Struct descriptors list only fields that can contain managed handles.
+%% The cell handle itself remains a root, including through interior pointers.
+%% Tracing metadata is separate so ordinary reads/writes keep their fast path.
+new(Value) -> new(Value, true).
+
+new(Value, Trace) when is_boolean(Trace) -> new_cell(Value, Trace);
+new(Value, {fields, Fields} = Trace) when is_list(Fields) -> new_cell(Value, Trace).
+
+new_cell(Value, Trace) ->
     case state(frames, []) of
         [] -> erlang:error(linglang_missing_root_scope);
         _ -> ok
     end,
     Id = make_ref(),
     put({linglang_cell, Id}, Value),
+    case Trace of
+        true -> ok;
+        _ -> put({linglang_cell_trace, Id}, Trace)
+    end,
     put({linglang_gc, cells}, [Id | state(cells, [])]),
     Live = increment(live_cells, 1),
     increment(allocated_cells, 1),
@@ -202,7 +215,10 @@ collect() ->
     {Alive, Freed} = lists:foldl(fun(Id, {Acc, Count}) ->
         case is_map_key(Id, Marked) of
             true -> {[Id | Acc], Count};
-            false -> erase({linglang_cell, Id}), {Acc, Count + 1}
+            false ->
+                erase({linglang_cell, Id}),
+                erase({linglang_cell_trace, Id}),
+                {Acc, Count + 1}
         end
     end, {[], 0}, state(cells, [])),
     Live = length(Alive),
@@ -222,9 +238,20 @@ mark([Id | Rest], Seen) ->
         false ->
             case get({linglang_cell, Id}) of
                 undefined -> erlang:error(linglang_invalid_root);
-                Value -> mark(references(Value, Rest), Seen#{Id => true})
+                Value -> mark(cell_references(Value, cell_trace(Id), Rest), Seen#{Id => true})
             end
     end.
+
+cell_trace(Id) ->
+    case get({linglang_cell_trace, Id}) of
+        undefined -> true;
+        Trace -> Trace
+    end.
+
+cell_references(_, false, Acc) -> Acc;
+cell_references(Value, true, Acc) -> references(Value, Acc);
+cell_references(Value, {fields, Fields}, Acc) ->
+    lists:foldl(fun(Field, Refs) -> references(maps:get(Field, Value), Refs) end, Acc, Fields).
 
 %% A field reference roots its entire cell. Struct snapshots can contain pointers
 %% even when the original struct variable has since been overwritten.
@@ -525,7 +552,8 @@ loop_cell_next(Condition, Body, Post, Token, Cell) ->
                 try Body(Cell)
                 catch throw:{linglang_continue, Token} -> ok
                 end,
-                Next = new(read(Cell)),
+                {linglang_ptr, _, Id, _} = Cell,
+                Next = new(read(Cell), cell_trace(Id)),
                 scope(fun() -> Post(Next) end),
                 {next, Next}
         end

@@ -9,7 +9,7 @@ func emitSwitch(e *Emitter, node SyntaxNode) string {
 		expression := childAt(node, 1)
 		emitRequireType(e, defaultType(emitValue(e, expression).typeID), expression.at)
 		tag = emitFresh(e)
-		setup += ", " + tag + " = linglang_rt:keep(" + emitExpression(e, expression, false) + ")"
+		setup += ", " + tag + " = " + emitKeep(e, emitValue(e, expression).typeID, emitExpression(e, expression, false))
 	}
 	stop := emitFresh(e)
 	setup += ", " + stop + " = make_ref()"
@@ -26,7 +26,7 @@ func emitSwitch(e *Emitter, node SyntaxNode) string {
 			for _, expression := range values {
 				condition := emitExpression(e, expression, false)
 				if tag != "" {
-					condition = emitOrdered(e, List[string]{tag, condition}, "fun(A, B) -> linglang_rt:binary(eq, A, B) end")
+					condition = emitOrdered(e, List[string]{tag, condition}, List[int]{emitValue(e, childAt(node, 1)).typeID, emitValue(e, expression).typeID}, "fun(A, B) -> linglang_rt:binary(eq, A, B) end")
 				}
 				conditions = append(conditions, "("+condition+")")
 			}

@@ -89,7 +89,7 @@ func emitAddress(e *Emitter, node SyntaxNode) string {
 		}
 		return "linglang_rt:field(" + code + ", " + emitFieldName(childAt(node, 1).text) + ")"
 	case "CompositeLit":
-		return "linglang_rt:new(" + emitExpression(e, node, false) + ")"
+		return emitNew(e, emitValue(e, node).typeID, emitExpression(e, node, false))
 	}
 	emitFail(e, node.at, "bootstrap emitter does not support reference target "+node.kind)
 	return ""
@@ -110,8 +110,7 @@ func emitStruct(e *Emitter, node SyntaxNode, id int) string {
 		}
 		value := emitFresh(e)
 		code := emitExpression(e, childAt(element, 1), false)
-		setup = prepend(value+" = "+code, setup)
-		setup = prepend("linglang_rt:keep("+value+")", setup)
+		setup = prepend(value+" = "+emitKeep(e, emitValue(e, childAt(element, 1)).typeID, code), setup)
 		fields = prepend(emitFieldName(childAt(element, 0).text)+" := "+value, fields)
 	}
 	zero := emitZero(e, id, node.at)

@@ -531,6 +531,9 @@ go run ./cmd/linglang emit examples/counter.lang
 statistics. `--no-opt` uses the original compiler backend. same program, more cells.
 small helpers that cannot allocate managed cells or trigger collection borrow
 their caller's roots. fewer scopes around `counter.value++`, same pointer.
+Both backends keep cell identities rooted while skipping pointer-free contents.
+For structs, collection scans only fields that can contain managed pointers.
+The bootstrap emitter also skips temporary roots for pointer-free operands.
 
 `build` writes BEAM modules; `pack` bundles an executable; `release` includes the
 VM too; `emit` prints generated Erlang. this is where the Erlang was hiding.
@@ -814,11 +817,19 @@ elided pointer literals remain unsupported by both emitters. runtime conversions
 support identity casts only; variable declarations need one named variable per
 spec. embedded constant strings are capped at 1 MiB and expression/zero-value
 nesting at 128 levels. `new` and `make` still need backend support; use an addressed
-local or `&Struct{}`. the Go-seeded emitter can now compile its own source to BEAM.
-the full A → B → C rebuild is still unverified: the emitted cell backend exceeded
-a ten-minute rebuild deadline, and profiling found heavy GC traversal of AST
-values. type-aware root handling is the next optimization target. the CLI,
-formatter, test runner, and full seed-language coverage still need further work.
+local or `&Struct{}`. the compiler now rebuilds itself using only Erlang/OTP
+after the initial Go seed. A builds B; B rebuilds C with byte-identical emitted
+compiler source. The opt-in proof also compiles C and checks execution, source
+diagnostics, and GC cleanup. On the local macOS ARM64 / OTP 29 run, B rebuilt C
+in about three minutes after type-aware tracing removed repeated scans of
+pointer-free AST/metadata values. The CLI, formatter, test runner, and full
+seed-language coverage still need further work.
+
+Run the full proof explicitly; it stays outside ordinary tests and push CI:
+
+```sh
+LINGLANG_SELFHOST=1 go test ./cmd/linglang -run '^TestBootstrapSelfHostProof$' -count=1 -timeout=20m -v
+```
 
 it can compile the lexer now. after the runtime setup above, these steps use only
 Erlang/OTP:

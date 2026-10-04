@@ -33,7 +33,7 @@ func emitVariables(e *Emitter, node SyntaxNode) string {
 		if head(values).ok {
 			value = emitExpression(e, head(values).value, false)
 		}
-		parts = append(parts, emitCell(e, name, true)+" = linglang_rt:new("+emitScope(value)+")")
+		parts = append(parts, emitCell(e, name, true)+" = "+emitNew(e, id, emitScope(value)))
 	}
 	return "(begin " + join(parts, ", ") + " end)"
 }
@@ -53,7 +53,7 @@ func emitAssignment(e *Emitter, node SyntaxNode) string {
 	if node.text == ":=" {
 		id := emitDefinition(e, target).typeID
 		emitRequireType(e, id, target.at)
-		return emitCell(e, target, true) + " = linglang_rt:new(" + emitScope(value) + ")"
+		return emitCell(e, target, true) + " = " + emitNew(e, id, emitScope(value))
 	}
 	// Evaluate and root the destination before the RHS can overwrite its last
 	// alias or collect. Read a compound-assignment value before evaluating RHS.
@@ -65,7 +65,7 @@ func emitAssignment(e *Emitter, node SyntaxNode) string {
 		if op == "<<" || op == ">>" {
 			value = emitShiftCount(e, head(rhs).value)
 		}
-		value = emitOrdered(e, List[string]{"linglang_rt:read(" + cell + ")", value}, "fun(A, B) -> linglang_rt:binary("+emitOperator(op)+", A, B) end")
+		value = emitOrdered(e, List[string]{"linglang_rt:read(" + cell + ")", value}, List[int]{emitValue(e, target).typeID, emitValue(e, head(rhs).value).typeID}, "fun(A, B) -> linglang_rt:binary("+emitOperator(op)+", A, B) end")
 	}
 	return emitScope(setup + "linglang_rt:write(" + cell + ", " + value + ")")
 }

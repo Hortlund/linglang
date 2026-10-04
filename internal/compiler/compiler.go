@@ -298,6 +298,24 @@ func (c *compiler) fresh() string {
 	return fmt.Sprintf("_V%d", c.next)
 }
 
+// Cell identity is rooted even when its static value cannot hold managed handles.
+func (c *compiler) newCell(t types.Type, value string) string {
+	if !containsReferences(t) {
+		return "linglang_rt:new(" + value + ", false)"
+	}
+	if st, ok := t.Underlying().(*types.Struct); ok {
+		var fields []string
+		for i := 0; i < st.NumFields(); i++ {
+			field := st.Field(i)
+			if containsReferences(field.Type()) {
+				fields = append(fields, fieldName(field.Name()))
+			}
+		}
+		return "linglang_rt:new(" + value + ", {fields, [" + strings.Join(fields, ", ") + "]})"
+	}
+	return "linglang_rt:new(" + value + ")"
+}
+
 func (c *compiler) cell(obj types.Object) string {
 	if name, ok := c.cells[obj]; ok {
 		return name
@@ -335,7 +353,7 @@ func (c *compiler) function(fn *ast.FuncDecl) (string, error) {
 		param := sig.Params().At(i)
 		arg := c.fresh()
 		args = append(args, arg)
-		setup = append(setup, c.cell(param)+" = linglang_rt:new("+arg+")")
+		setup = append(setup, c.cell(param)+" = "+c.newCell(param.Type(), arg))
 	}
 	body, err := c.block(fn.Body)
 	if err != nil {
@@ -415,7 +433,7 @@ func (c *compiler) statementCode(stmt ast.Stmt) (string, error) {
 					return "", err
 				}
 			}
-			parts = append(parts, c.cell(obj)+" = linglang_rt:new("+scoped(value)+")")
+			parts = append(parts, c.cell(obj)+" = "+c.newCell(obj.Type(), scoped(value)))
 		}
 		return "begin " + strings.Join(parts, ", ") + " end", nil
 	case *ast.AssignStmt:
@@ -434,7 +452,7 @@ func (c *compiler) statementCode(stmt ast.Stmt) (string, error) {
 		}
 		if s.Tok == token.DEFINE {
 			id := s.Lhs[0].(*ast.Ident)
-			return c.cell(c.info.Defs[id]) + " = linglang_rt:new(" + scoped(value) + ")", nil
+			return c.cell(c.info.Defs[id]) + " = " + c.newCell(c.info.Defs[id].Type(), scoped(value)), nil
 		}
 		address, err := c.address(s.Lhs[0])
 		if err != nil {
@@ -810,7 +828,7 @@ func (c *compiler) address(expr ast.Expr) (string, error) {
 		return "linglang_rt:field(" + base + ", " + fieldName(e.Sel.Name) + ")", err
 	case *ast.CompositeLit:
 		value, err := c.expression(e)
-		return "linglang_rt:new(" + value + ")", err
+		return c.newCell(c.info.TypeOf(expr), value), err
 	default:
 		return "", c.errorf(expr, "unsupported reference target")
 	}

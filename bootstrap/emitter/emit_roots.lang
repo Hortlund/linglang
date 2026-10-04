@@ -1,0 +1,80 @@
+package main
+
+// Traverse the complete reachable type graph. Recursive value containers do
+// not themselves imply pointers; a pointer anywhere in the graph does.
+// Cache only the starting type, so partially visited cycles never cache a false
+// answer for a subgraph that reaches a pointer through its ancestor.
+func emitReferences(e *Emitter, id int) bool {
+	if emitPrimitive(id) || id == tNil || id == tVoid || (id >= tUntypedInt && id <= tRune) {
+		return false
+	}
+	found := get(e.referenceTypes, id)
+	if found.ok {
+		return found.value
+	}
+	pending := List[int]{id}
+	var seen Map[int, bool]
+	references := false
+	for head(pending).ok && !references {
+		current := head(pending).value
+		pending = tail(pending)
+		if get(seen, current).ok {
+			continue
+		}
+		seen = put(seen, current, true)
+		if emitPrimitive(current) || current == tNil || current == tVoid || (current >= tUntypedInt && current <= tRune) {
+			continue
+		}
+		t := get(e.checked.types, current).value
+		switch t.kind {
+		case "list", "delivery":
+			pending = prepend(t.elem, pending)
+		case "map":
+			pending = prepend(t.key, prepend(t.elem, pending))
+		case "struct":
+			for _, field := range t.fields {
+				pending = prepend(field.typeID, pending)
+			}
+		default:
+			// Pointers and unknown/unsupported types retain conservative tracing.
+			references = true
+		}
+	}
+	e.referenceTypes = put(e.referenceTypes, id, references)
+	return references
+}
+
+func emitNew(e *Emitter, id int, value string) string {
+	if !emitReferences(e, id) {
+		return "linglang_rt:new(" + value + ", false)"
+	}
+	t := get(e.checked.types, id).value
+	if t.kind == "struct" {
+		var fields List[string]
+		for _, field := range t.fields {
+			if emitReferences(e, field.typeID) {
+				fields = append(fields, emitFieldName(field.name))
+			}
+		}
+		return "linglang_rt:new(" + value + ", {fields, [" + join(fields, ", ") + "]})"
+	}
+	if t.kind == "delivery" {
+		return "linglang_rt:new(" + value + ", {fields, [" + emitFieldName("value") + "]})"
+	}
+	return "linglang_rt:new(" + value + ")"
+}
+
+func emitKeep(e *Emitter, id int, value string) string {
+	if emitReferences(e, id) {
+		return "linglang_rt:keep(" + value + ")"
+	}
+	return value
+}
+
+func emitArgumentTypes(e *Emitter, node SyntaxNode) List[int] {
+	var ids List[int]
+	for _, argument := range tail(node.children) {
+		ids = append(ids, emitValue(e, argument).typeID)
+	}
+	return ids
+}

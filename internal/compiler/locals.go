@@ -103,7 +103,7 @@ func (c *compiler) optimizedFunction(fn *ast.FuncDecl) (string, error) {
 		args = append(args, arg)
 		if entry.live[obj] && g.lookup[obj].boxed {
 			cell := c.fresh()
-			setup = append(setup, cell+" = linglang_rt:new("+arg+")")
+			setup = append(setup, cell+" = "+c.newCell(obj.Type(), arg))
 			state[obj] = cell
 		} else {
 			state[obj] = arg
@@ -434,7 +434,7 @@ func (g *localLowering) emitBlock(b *flowBlock) (string, error) {
 	if b.clone != nil {
 		obj := b.clone
 		value := c.fresh()
-		parts = append(parts, value+" = linglang_rt:new(linglang_rt:read("+state[obj]+"))")
+		parts = append(parts, value+" = "+c.newCell(obj.Type(), "linglang_rt:read("+state[obj]+")"))
 		state[obj], c.cells[obj] = value, value
 	}
 	if b.stmt != nil {
@@ -473,7 +473,7 @@ func (g *localLowering) declare(obj types.Object, value string, state map[types.
 	state[obj] = name
 	if g.lookup[obj].boxed {
 		c.cells[obj] = name
-		return name + " = linglang_rt:new(" + g.eval(value) + ")"
+		return name + " = " + c.newCell(obj.Type(), g.eval(value))
 	}
 	c.values[obj] = name
 	return name + " = " + g.eval(value)
