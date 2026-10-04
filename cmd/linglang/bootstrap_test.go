@@ -49,6 +49,7 @@ func TestBootstrapLexerAgainstGoScanner(t *testing.T) {
 		"0 0_7 0o_7 0B_1 0X_FF 12_345 99999999999999999999999",
 		"<<= >>= &^= ... ++ -- := <- && || &^ <= != ( ) [ ] { } ; ~",
 		"// control\x01\x7f\nreturn\n/* end */",
+		"+ += ++ - -= -- -> * *= / /= % %= & &= && &^ &^= | |= || ^ ^= ! != = == < <= << <<= <- > >= >> >>= . ... ( ) [ ] { } , ; : := ~",
 	} {
 		path := filepath.Join(t.TempDir(), fmt.Sprintf("fixture-%d.lang", i))
 		if err := os.WriteFile(path, []byte(data), 0600); err != nil {

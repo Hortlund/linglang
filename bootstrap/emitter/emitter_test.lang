@@ -49,7 +49,10 @@ func TestEmitterBoundaries() {
 		"func main(){panic(1)}",
 		"func main(){startSupervisor(1,100)}",
 		"func main(){x,y:=1,2;println(x,y)}",
-		"func main(){switch{default:}}",
+		"func f()int{switch{case true:return 1}};func main(){}",
+		"func f()int{switch{default:break;return 1}};func main(){}",
+		"func main(){break}",
+		"func main(){switch{default:continue}}",
 		"func main(){println(List[int]{1:2})}",
 		"func main(){println(List[*int]{{}})}",
 	}) {
@@ -71,6 +74,21 @@ func TestEmitterLoops() {
 		assert(parsed.ok)
 		result := emitPackage(List[SyntaxNode]{parsed.root})
 		assert(result.ok && result.reason == "" && (len(split(result.module, "linglang_rt:loop(")) > 1 || len(split(result.module, "linglang_rt:loop_cell(")) > 1))
+	}
+}
+
+func TestEmitterSwitches() {
+	for _, source := range (List[string]{
+		"func main(){switch n:=2;n{default:println(0);case 1,2:println(n);break}}",
+		"func f(n int)int{switch n{case 1:return 2;default:return 3}};func main(){println(f(1))}",
+		"func f()int{for{switch{default:break};return 1}};func main(){println(f())}",
+		"func main(){for i:=0;i<2;i++{switch i{case 0:continue;default:for{break};break};println(i)}}",
+		"func main(){switch{};switch{default:};println(len(args()),readFile(\"missing\").ok,runeAt(\"雪\",0).width)}",
+	}) {
+		parsed := parse("switches.lang", "package main\n"+source)
+		assert(parsed.ok)
+		result := emitPackage(List[SyntaxNode]{parsed.root})
+		assert(result.ok && result.reason == "" && len(result.module) > 0)
 	}
 }
 

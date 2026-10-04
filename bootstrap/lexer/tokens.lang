@@ -304,8 +304,10 @@ func comment(s *Lexer, start int, line int, column int) {
 
 func operator(s *Lexer) string {
 	// Longest first: a shorter prefix must not eat an assignment or ellipsis.
+	// Reject other leading bytes before reading scanner fields in startsWith.
+	c := currentByte(s)
 	for _, op := range (List[string]{"<<=", ">>=", "&^=", "...", "++", "--", "==", "!=", "<=", ">=", ":=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "&&", "||", "<<", ">>", "&^", "<-", "+", "-", "*", "/", "%", "&", "|", "^", "!", "=", "<", ">", "(", ")", "[", "]", "{", "}", ",", ".", ";", ":", "~"}) {
-		if startsWith(s, op) {
+		if byteAt(op, 0) == c && startsWith(s, op) {
 			for i := 0; i < len(op); i++ {
 				advance(s)
 			}

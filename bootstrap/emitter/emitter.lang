@@ -15,6 +15,7 @@ type Emitter struct {
 	depth   int
 	ret     string
 	loops   List[string]
+	breaks  List[string]
 	reason  string
 	at      Token
 }
@@ -205,7 +206,7 @@ func emitTerminates(e *Emitter, node SyntaxNode) bool {
 	if node.kind == "ReturnStmt" {
 		return true
 	}
-	if node.kind == "BlockStmt" {
+	if node.kind == "BlockStmt" || node.kind == "Body" {
 		for _, statement := range node.children {
 			if emitTerminates(e, statement) {
 				return true
@@ -218,6 +219,19 @@ func emitTerminates(e *Emitter, node SyntaxNode) bool {
 	if node.kind == "ForStmt" {
 		return childAt(node, 1).kind == "nil" && !emitLoopHasBreak(childAt(node, 3))
 	}
+	if node.kind == "SwitchStmt" {
+		defaultFound := false
+		for _, clause := range childAt(node, 2).children {
+			if !head(childAt(clause, 0).children).ok {
+				defaultFound = true
+			}
+			body := childAt(clause, 1)
+			if emitLoopHasBreak(body) || !emitTerminates(e, body) {
+				return false
+			}
+		}
+		return defaultFound
+	}
 	if node.kind == "ExprStmt" {
 		call := childAt(node, 0)
 		if call.kind == "CallExpr" {
@@ -228,7 +242,8 @@ func emitTerminates(e *Emitter, node SyntaxNode) bool {
 	return false
 }
 
-// Breaks in a nested loop target that loop; they do not make this loop exit.
+// A nested loop or switch owns its breaks. This also checks a switch case body
+// for breaks targeting that switch when deciding whether every case terminates.
 func emitLoopHasBreak(body SyntaxNode) bool {
 	pending := List[SyntaxNode]{body}
 	for head(pending).ok {

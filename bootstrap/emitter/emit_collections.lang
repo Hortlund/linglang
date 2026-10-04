@@ -116,7 +116,9 @@ func emitRange(e *Emitter, node SyntaxNode) string {
 	}
 	loop := emitFresh(e)
 	e.loops = prepend(loop, e.loops)
+	e.breaks = prepend(loop, e.breaks)
 	bindings = append(bindings, emitStatement(e, childAt(node, 3)))
+	e.breaks = tail(e.breaks)
 	e.loops = tail(e.loops)
 	body := emitScope(join(bindings, ", "))
 	post := "linglang_rt:write(" + rest + ", linglang_rt:list_tail(linglang_rt:read(" + rest + ")))"

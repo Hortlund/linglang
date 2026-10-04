@@ -264,3 +264,30 @@ Raw reports: `_build/benchmarks/frontend-collections-before.json` and
 `frontend-collections-after.json`. Call-time profiles are saved as
 `profile-check-before.txt` and `profile-check-after.txt` in the same directory.
 Profiling adds overhead; the timings above come from uninstrumented runs.
+
+### Lexer operator recognition
+
+Lex/parse call-time profiles found 48,062 calls to `startsWith` on the lexer
+corpus: operator recognition tried every prefix, repeatedly reading scanner
+fields. It now caches the current byte and tests each candidate's first byte
+before checking its full prefix. The longest-first ordering is unchanged.
+The follow-up profile recorded 4,547 `startsWith` calls.
+
+Uninstrumented macOS ARM64 / OTP 29 runs used three samples and one warmup per
+backend, with no concurrent heavy tests:
+
+| Entry point | Optimized before / after (ms) | Cells before / after (ms) |
+| --- | ---: | ---: |
+| lex | 115.108 / 105.903 | 588.261 / 379.644 |
+| parse | 142.094 / 135.904 | 830.949 / 573.439 |
+
+Optimized lex reductions fell from 15.83 million to 14.84 million; cell lex
+allocations fell from 291,259 to 164,202. Parse includes lexing, so these are
+overlapping improvements. Corpus paths were unchanged; the lexer corpus itself
+includes the small source edit. Fingerprints record both revisions. These local
+samples support this narrow optimization, not a global speedup or CI threshold.
+
+Reports: `_build/benchmarks/frontend-operators-before.json` and
+`frontend-operators-after.json`. Separate tracing reports are
+`profile-lex-before.txt`, `profile-lex-after.txt`, `profile-parse-before.txt`, and
+`profile-parse-after.txt` in the same directory.

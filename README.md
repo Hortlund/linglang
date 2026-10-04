@@ -792,10 +792,11 @@ no Go sneaking into the compilation step wearing a fake moustache.
 
 pass explicit source files from one package. functions, recursion, primitive
 `int`/`bool`/`string` variables, structs, pointers, constants, arithmetic, bitwise
-operations, direct calls, returns, blocks, `if`/`else`, and `for` loops work.
-nested loops, `break`, `continue`, and returns from inside loops use the existing
-BEAM runtime. printing, `len`, `formatInt`, `trim`, `byteAt`, `slice`, `join`,
-`split`, `isLetter`, `isDigit`, `assert`, and string `panic` work too.
+operations, direct calls, returns, blocks, `if`/`else`, `switch`, and `for` loops work.
+nested loops and switches, `break`, `continue`, and returns use the existing
+BEAM runtime. switch tags evaluate once; cases run in order and stop at the first
+match. printing, `len`, `formatInt`, `trim`, `byteAt`, `slice`, `join`,
+`split`, `args`, `readFile`, `runeAt`, `isLetter`, `isDigit`, `assert`, and string `panic` work too.
 
 struct literals use named fields. struct assignment copies values; pointer
 assignment keeps aliases. `&`, `*`, field updates, returned locals, interior
@@ -807,14 +808,30 @@ try `./bin/linglang-emitter examples/bootstrap_collections.lang`.
 
 the emitter sorts files, retains checked expression types and bindings,
 and rejects unsupported constructs with source locations before printing a module.
-switches, OTP calls, file/argument helpers, multiple assignment, and `if`
+OTP calls, remaining native helpers, multiple assignment, and `if`
 initializers still need the seed backend. map range, indexed list literals, and
 elided pointer literals remain unsupported by both emitters. runtime conversions
 support identity casts only; variable declarations need one named variable per
 spec. embedded constant strings are capped at 1 MiB and expression/zero-value
 nesting at 128 levels. `new` and `make` still need backend support; use an addressed
-local or `&Struct{}`. compiling the compiler itself is the next boss fight;
-this emitter cannot compile its own source yet.
+local or `&Struct{}`. the Go-seeded emitter can now compile its own source to BEAM.
+the full A → B → C rebuild is still unverified: the emitted cell backend exceeded
+a ten-minute rebuild deadline, and profiling found heavy GC traversal of AST
+values. type-aware root handling is the next optimization target. the CLI,
+formatter, test runner, and full seed-language coverage still need further work.
+
+it can compile the lexer now. after the runtime setup above, these steps use only
+Erlang/OTP:
+
+```sh
+./bin/linglang-emitter bootstrap/lexer/main.lang bootstrap/lexer/text.lang bootstrap/lexer/tokens.lang > _build/bootstrap-demo/linglang_program.erl
+erlc -o _build/bootstrap-demo _build/bootstrap-demo/linglang_program.erl
+erl -noshell -pa _build/bootstrap-demo -eval 'linglang_program:main(), halt().' -extra bootstrap/lexer/tokens.lang
+```
+
+the resulting lexer tokenizes its own source. the integration oracle checks token
+output and source diagnostics against both seed backends, with forced GC on small
+valid and malformed inputs and no Go available during emission or execution.
 
 the loop example counts three ASCII identifiers and sums 1,000 integers:
 

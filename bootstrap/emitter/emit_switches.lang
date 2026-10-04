@@ -1,0 +1,41 @@
+package main
+
+// Keep the tag snapshot alive while ordered, short-circuiting case expressions
+// run. Switches add a break target, leaving the enclosing continue target intact.
+func emitSwitch(e *Emitter, node SyntaxNode) string {
+	setup := emitStatement(e, childAt(node, 0))
+	tag := ""
+	if childAt(node, 1).kind != "nil" {
+		expression := childAt(node, 1)
+		emitRequireType(e, defaultType(emitValue(e, expression).typeID), expression.at)
+		tag = emitFresh(e)
+		setup += ", " + tag + " = linglang_rt:keep(" + emitExpression(e, expression, false) + ")"
+	}
+	stop := emitFresh(e)
+	setup += ", " + stop + " = make_ref()"
+	e.breaks = prepend(stop, e.breaks)
+	var branches List[string]
+	fallback := "ok"
+	for _, clause := range childAt(node, 2).children {
+		body := emitBlock(e, childAt(clause, 1))
+		values := childAt(clause, 0).children
+		if !head(values).ok {
+			fallback = body
+		} else {
+			var conditions List[string]
+			for _, expression := range values {
+				condition := emitExpression(e, expression, false)
+				if tag != "" {
+					condition = emitOrdered(e, List[string]{tag, condition}, "fun(A, B) -> linglang_rt:binary(eq, A, B) end")
+				}
+				conditions = append(conditions, "("+condition+")")
+			}
+			branches = prepend("case "+emitScope(join(conditions, " orelse "))+" of true -> "+body+"; false -> ", branches)
+		}
+	}
+	e.breaks = tail(e.breaks)
+	for _, branch := range branches {
+		fallback = branch + fallback + " end"
+	}
+	return emitScope(setup + ", try " + fallback + " catch throw:{linglang_break, " + stop + "} -> ok end")
+}

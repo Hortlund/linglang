@@ -92,7 +92,9 @@ func emitFor(e *Emitter, node SyntaxNode) string {
 	post := emitStatement(e, childAt(node, 2))
 	loop := emitFresh(e)
 	e.loops = prepend(loop, e.loops)
+	e.breaks = prepend(loop, e.breaks)
 	body := emitStatement(e, childAt(node, 3))
+	e.breaks = tail(e.breaks)
 	e.loops = tail(e.loops)
 	if iteration != "" {
 		e.cells = put(e.cells, key, initial)
@@ -114,12 +116,18 @@ func emitStatement(e *Emitter, node SyntaxNode) string {
 		return emitRange(e, node)
 	case "ForStmt":
 		return emitFor(e, node)
+	case "SwitchStmt":
+		return emitSwitch(e, node)
 	case "BranchStmt":
-		if !head(e.loops).ok || (node.text != "break" && node.text != "continue") {
-			emitFail(e, node.at, "bootstrap emitter requires break or continue inside a loop")
+		targets := e.loops
+		if node.text == "break" {
+			targets = e.breaks
+		}
+		if !head(targets).ok || (node.text != "break" && node.text != "continue") {
+			emitFail(e, node.at, "break requires a loop or switch; continue requires a loop")
 			return ""
 		}
-		return "throw({linglang_" + node.text + ", " + head(e.loops).value + "})"
+		return "throw({linglang_" + node.text + ", " + head(targets).value + "})"
 	case "DeclStmt":
 		return emitVariables(e, childAt(node, 0))
 	case "AssignStmt":

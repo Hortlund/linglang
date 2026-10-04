@@ -261,6 +261,12 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 	if function.kind == "native" {
 		target := ""
 		switch function.name {
+		case "args":
+			target = "linglang_rt:arguments"
+		case "readFile":
+			target = "linglang_rt:read_file"
+		case "runeAt":
+			target = "linglang_rt:text_rune"
 		case "join":
 			target = "linglang_rt:text_join"
 		case "split":
