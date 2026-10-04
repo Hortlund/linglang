@@ -322,7 +322,7 @@ func TestBootstrapCheckerAgainstSeed(t *testing.T) {
 						// Checking the full frontend, including its tests, is much larger
 						// than the small fixtures. The reference backend stores every
 						// local in a managed cell; keep its self-check bounded separately.
-						budget = 5 * time.Minute
+						budget = 10 * time.Minute
 					}
 					ctx, cancel := context.WithTimeout(context.Background(), budget)
 					defer cancel()

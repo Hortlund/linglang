@@ -176,9 +176,19 @@ func TestBootstrapResolverAgainstSeedBindings(t *testing.T) {
 					for _, file := range files {
 						args = append(args, file.Filename)
 					}
-					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					budget := 30 * time.Second
+					if baseline && len(files) > 1 {
+						// Whole frontend packages carry much larger ASTs and symbol
+						// tables than the single-file scope fixtures. The cell backend
+						// needs more time on hosted runners, especially older OTP.
+						budget = 2 * time.Minute
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), budget)
 					defer cancel()
 					out, err := exec.CommandContext(ctx, "erl", args...).CombinedOutput()
+					if ctx.Err() != nil {
+						t.Fatalf("resolver timed out after %s\n%s", budget, out)
+					}
 					if err != nil {
 						t.Fatalf("resolver: %v\n%s", err, out)
 					}

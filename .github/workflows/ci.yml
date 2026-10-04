@@ -12,7 +12,7 @@ jobs:
   test:
     name: ${{ matrix.os }} / OTP ${{ matrix.otp }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -34,7 +34,7 @@ jobs:
       - name: Compiler, runtime, CLI, packaging, and release tests
         # The baseline frontend self-check plus per-fixture BEAM launches can
         # exceed ten minutes on hosted runners. Individual VMs remain bounded.
-        run: go test ./... -count=1 -timeout=20m
+        run: go test ./... -count=1 -timeout=30m
       - name: Build the CLI
         run: go build -o _build/linglang ./cmd/linglang
       - name: Check example formatting
