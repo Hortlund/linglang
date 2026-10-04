@@ -4,13 +4,49 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      full_compatibility:
+        description: Run the full Linux/macOS OTP compatibility suite
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   test:
+    name: Linux / OTP 29 smoke checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.x'
+          cache: false
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '29'
+      - name: Check Go formatting
+        run: test -z "$(gofmt -l cmd internal)"
+      - name: Vet
+        run: go vet ./...
+      - name: Compiler and dev tool tests
+        run: go test ./internal/... ./cmd/bench -count=1 -timeout=10m
+      - name: CLI, OTP, and packaging smoke tests
+        run: go test ./cmd/linglang -run '^(TestExecutionWithGCFlags|TestSupervisorEscalationExitsCleanly|TestDirectoryCLI|TestReadSources|TestPackCLI|TestDeveloperCommands|TestIsolatedOTPLaunchers|TestBootstrapEmitterPackedWithoutGo)$' -count=1 -timeout=5m
+      - name: Build the CLI
+        run: go build -o _build/linglang ./cmd/linglang
+      - name: Check example formatting
+        run: ./_build/linglang fmt --check examples/bean_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang
+      - name: Test beans on both backends with GC stress
+        run: |
+          ./_build/linglang test --gc-stress --gc-stats examples/bean_tests
+          ./_build/linglang test --no-opt --gc-stress --gc-stats examples/bean_tests
+
+  compatibility:
     name: ${{ matrix.os }} / OTP ${{ matrix.otp }}
+    if: github.event_name == 'workflow_dispatch' && inputs.full_compatibility
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:

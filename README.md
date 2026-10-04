@@ -656,7 +656,7 @@ include the real VS Code smoke test. the squiggle is employed now.
 ## test the compiler
 
 ```sh
-go test ./...
+go test ./... -timeout=30m
 go vet ./...
 go test ./internal/compiler -run='^$' -fuzz='^FuzzCompile$' -fuzztime=10s -parallel=2
 ```
@@ -666,10 +666,12 @@ GC stress and supervisor failure paths. the compiler fuzz target accepts inputs
 up to 16 KiB and checks that both backends agree on what compiles. it does not
 launch a VM for each input. we have verified that the guy dies.
 
-CI is configured to run the full suite on Linux and macOS with OTP 27, 28, and 29,
-using Go 1.23. it also runs the language tests on both backends and a bounded compiler
-fuzz run. a separate job checks the editor grammar and builds a Linux VSIX.
-linglang now has six computers checking its paperwork.
+push CI runs compiler and CLI smoke checks on Linux with OTP 29 and Go 1.23,
+plus the small example tests on both backends. a separate job checks the editor
+grammar and builds a Linux VSIX. the full suite, bootstrap tests, fuzzing, and
+Linux/macOS OTP 27–29 matrix are available from Actions → Run workflow by
+enabling `full_compatibility`. one computer checks the paperwork. the other five
+can go outside.
 
 ## linglang reads linglang
 
