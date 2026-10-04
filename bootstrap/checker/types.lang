@@ -30,6 +30,7 @@ type CheckedType struct {
 }
 
 type CheckedBinding struct {
+	at       Token
 	kind     string
 	typeID   int
 	constant ConstantValue
@@ -79,6 +80,7 @@ type Checker struct {
 	record        bool
 	expressions   Map[string, CheckedValue]
 	definitions   Map[string, CheckedBinding]
+	mapReferences List[Reference]
 	native        *TypeScope
 	global        *TypeScope
 	constants     Map[string, PendingConstant]
@@ -251,12 +253,50 @@ func fieldType(c *Checker, id int, name string) int {
 	return tInvalid
 }
 
-func sourceIdentity(at Token) string { return quotedText(at.filename) + ":" + formatInt(at.offset) }
+// The final colon separates a raw filename from a decimal position. Filenames
+// may contain colons, quotes, or newlines; decimal positions cannot, so this
+// key is injective without repeatedly escaping every byte of the filename.
+func sourceIdentity(at Token) string { return at.filename + ":" + formatInt(at.offset) }
 func expressionIdentity(node SyntaxNode) string {
-	return quotedText(node.at.filename) + ":" + formatInt(node.id)
+	return node.at.filename + ":" + formatInt(node.id)
 }
 func rememberDefinition(c *Checker, scope *TypeScope, node SyntaxNode) {
 	if c.record && node.text != "_" {
-		c.definitions = put(c.definitions, sourceIdentity(node.at), typedName(scope, node.text).value)
+		binding := typedName(scope, node.text).value
+		binding.at = node.at
+		scope.names = put(scope.names, node.text, binding)
+		c.definitions = put(c.definitions, sourceIdentity(node.at), binding)
 	}
+}
+
+// Identifier literal keys are ambiguous until their composite type is known.
+// Resolve runtime Map keys from the current type scope, whose definitions retain
+// their source identity. Struct fields remain deferred, even if a local shares
+// their name; folded constants need no managed-cell binding.
+func rememberMapKey(c *Checker, scope *TypeScope, key SyntaxNode) {
+	if c.record && c.reason == "" && key.kind == "Ident" {
+		binding := typedName(scope, key.text).value
+		if binding.kind == "var" || binding.kind == "param" {
+			c.mapReferences = prepend(Reference{at: key.at, symbol: Symbol{name: key.text, kind: binding.kind, at: binding.at}}, c.mapReferences)
+		}
+	}
+}
+
+func completeMapBindings(c *Checker, bindings ResolveResult) ResolveResult {
+	if !head(c.mapReferences).ok {
+		return bindings
+	}
+	bindings.references = append(bindings.references, orderedReferences(c.mapReferences)...)
+	var resolved Map[string, bool]
+	for _, reference := range c.mapReferences {
+		resolved = put(resolved, sourceIdentity(reference.at), true)
+	}
+	var deferred List[Token]
+	for _, at := range bindings.deferred {
+		if !get(resolved, sourceIdentity(at)).ok {
+			deferred = prepend(at, deferred)
+		}
+	}
+	bindings.deferred = tokenOrder(deferred)
+	return bindings
 }

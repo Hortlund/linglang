@@ -203,3 +203,17 @@ func TestSwitchAndEntrySignatures() {
 		assert(!checkedSource(source).ok)
 	}
 }
+
+func TestInternalIdentities() {
+	a := Token{filename: "a:\"雪\n.lang", offset: 12}
+	b := Token{filename: "a:\"雪\n.lang:1", offset: 2}
+	assert(sourceIdentity(a) != sourceIdentity(b))
+	assert(expressionIdentity(SyntaxNode{at: a, id: 12}) != expressionIdentity(SyntaxNode{at: b, id: 2}))
+	first := parse(a.filename, "package main\nfunc answer(n int)int{return n+1}")
+	second := parse(b.filename, "package main\nfunc main(){n:=2;println(answer(n))}")
+	checked := checkPackageInfo(List[SyntaxNode]{first.root, second.root}, true)
+	assert(first.ok && second.ok && checked.ok && len(checked.definitions) == 4)
+	function := head(tail(first.root.children)).value
+	name := head(childAt(head(childAt(function, 1).children).value, 0).children).value
+	assert(get(checked.definitions, sourceIdentity(name.at)).ok)
+}

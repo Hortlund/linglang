@@ -1,0 +1,127 @@
+package main
+
+// Literal keys and values are evaluated and rooted in source order. Dynamic
+// duplicate Map keys retain the final value, just like the seed emitter.
+func emitCollection(e *Emitter, node SyntaxNode, id int) string {
+	emitRequireType(e, id, node.at)
+	kind := get(e.checked.types, id).value.kind
+	var setup List[string]
+	var values List[string]
+	for _, element := range tail(node.children) {
+		if kind == "list" && element.kind == "KeyValueExpr" {
+			emitFail(e, element.at, "list literals require positional elements")
+			return ""
+		}
+		operands := List[SyntaxNode]{element}
+		if kind == "map" {
+			operands = element.children
+		}
+		var pair List[string]
+		for _, operand := range operands {
+			name := emitFresh(e)
+			setup = prepend(name+" = "+emitExpression(e, operand, false), setup)
+			setup = prepend("linglang_rt:keep("+name+")", setup)
+			pair = append(pair, name)
+		}
+		item := head(pair).value
+		if kind == "map" {
+			item = "{" + join(pair, ", ") + "}"
+		}
+		values = prepend(item, values)
+	}
+	var orderedValues List[string]
+	for _, value := range values {
+		orderedValues = prepend(value, orderedValues)
+	}
+	result := "[" + join(orderedValues, ", ") + "]"
+	if kind == "map" {
+		result = "maps:from_list(" + result + ")"
+	}
+	setup = prepend(result, setup)
+	var ordered List[string]
+	for _, part := range setup {
+		ordered = prepend(part, ordered)
+	}
+	return "(begin " + join(ordered, ", ") + " end)"
+}
+
+func emitAppend(e *Emitter, node SyntaxNode, codes List[string]) string {
+	if node.text == "..." {
+		return emitOrdered(e, codes, "linglang_rt:list_append")
+	}
+	var names List[string]
+	for range codes {
+		names = append(names, emitFresh(e))
+	}
+	return emitOrdered(e, codes, "fun("+join(names, ", ")+") -> linglang_rt:list_append("+head(names).value+", ["+join(tail(names), ", ")+"]) end")
+}
+
+func emitCollectionCall(e *Emitter, node SyntaxNode, name string, codes List[string]) string {
+	result := emitValue(e, node).typeID
+	emitRequireType(e, result, node.at)
+	for _, argument := range tail(node.children) {
+		id := emitValue(e, argument).typeID
+		if id != tNil {
+			emitRequireType(e, defaultType(id), argument.at)
+		}
+	}
+	target := "linglang_rt:list_" + name
+	if name == "get" || name == "put" || name == "remove" {
+		target = "linglang_rt:map_" + name
+	}
+	if name == "head" || name == "get" {
+		codes = append(codes, emitZero(e, get(e.checked.types, result).value.elem, node.at))
+	}
+	return emitOrdered(e, codes, target)
+}
+
+// The remainder cell owns an immutable snapshot of the source list. Declared
+// iteration variables get fresh cells inside each body scope; assignment form
+// writes the enclosing variables. Continue advances, while break skips post.
+func emitRange(e *Emitter, node SyntaxNode) string {
+	sequence := childAt(node, 2)
+	id := emitValue(e, sequence).typeID
+	if get(e.checked.types, id).value.kind != "list" {
+		emitFail(e, node.at, "range currently requires a List")
+		return ""
+	}
+	emitRequireType(e, id, sequence.at)
+	rest := emitFresh(e)
+	setup := rest + " = linglang_rt:new(" + emitScope(emitExpression(e, sequence, false)) + ")"
+	index := ""
+	if childAt(node, 0).kind != "nil" && childAt(node, 0).text != "_" {
+		index = emitFresh(e)
+		setup += ", " + index + " = linglang_rt:new(0)"
+	}
+	var bindings List[string]
+	position := 0
+	for _, name := range (List[SyntaxNode]{childAt(node, 0), childAt(node, 1)}) {
+		if name.kind != "nil" && name.text != "_" {
+			if name.kind != "Ident" {
+				emitFail(e, name.at, "range targets must be identifiers")
+				return ""
+			}
+			value := "linglang_rt:list_first(linglang_rt:read(" + rest + "))"
+			if position == 0 {
+				value = "linglang_rt:read(" + index + ")"
+			}
+			if node.text == ":=" {
+				emitRequireType(e, emitDefinition(e, name).typeID, name.at)
+				bindings = append(bindings, emitCell(e, name, true)+" = linglang_rt:new("+value+")")
+			} else {
+				bindings = append(bindings, "linglang_rt:write("+emitCell(e, name, false)+", "+value+")")
+			}
+		}
+		position++
+	}
+	loop := emitFresh(e)
+	e.loops = prepend(loop, e.loops)
+	bindings = append(bindings, emitStatement(e, childAt(node, 3)))
+	e.loops = tail(e.loops)
+	body := emitScope(join(bindings, ", "))
+	post := "linglang_rt:write(" + rest + ", linglang_rt:list_tail(linglang_rt:read(" + rest + ")))"
+	if index != "" {
+		post = "linglang_rt:write(" + index + ", linglang_rt:binary(add, linglang_rt:read(" + index + "), 1)), " + post
+	}
+	return emitScope(setup + ", " + loop + " = make_ref(), linglang_rt:loop(fun() -> linglang_rt:list_more(linglang_rt:read(" + rest + ")) end, fun() -> " + body + " end, fun() -> " + post + " end, " + loop + ")")
+}

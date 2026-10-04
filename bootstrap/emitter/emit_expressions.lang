@@ -132,8 +132,24 @@ func emitExpressionInner(e *Emitter, node SyntaxNode, unsigned bool) string {
 	case "ParenExpr":
 		return emitExpression(e, childAt(node, 0), unsigned)
 	case "Ident":
+		if value.typeID == tNil {
+			return "nil"
+		}
 		return "linglang_rt:read(" + emitCell(e, node, false) + ")"
+	case "StarExpr":
+		return "linglang_rt:read(" + emitExpression(e, childAt(node, 0), false) + ")"
+	case "SelectorExpr":
+		return "linglang_rt:field_value(" + emitExpression(e, childAt(node, 0), false) + ", " + emitFieldName(childAt(node, 1).text) + ")"
+	case "CompositeLit":
+		kind := get(e.checked.types, value.typeID).value.kind
+		if kind == "list" || kind == "map" {
+			return emitCollection(e, node, value.typeID)
+		}
+		return emitStruct(e, node, value.typeID)
 	case "UnaryExpr":
+		if node.text == "&" {
+			return emitAddress(e, childAt(node, 0))
+		}
 		x := emitExpression(e, childAt(node, 0), unsigned)
 		switch node.text {
 		case "+":
@@ -171,13 +187,25 @@ func emitExpressionInner(e *Emitter, node SyntaxNode, unsigned bool) string {
 	return ""
 }
 
+func emitCallee(node SyntaxNode) SyntaxNode {
+	for node.kind == "ParenExpr" || node.kind == "IndexExpr" || node.kind == "IndexListExpr" {
+		node = childAt(node, 0)
+	}
+	return node
+}
+
 func emitCall(e *Emitter, node SyntaxNode) string {
-	callee := childAt(node, 0)
-	if callee.kind != "Ident" || node.text != "" {
+	callee := emitCallee(childAt(node, 0))
+	if callee.kind != "Ident" {
 		emitFail(e, node.at, "bootstrap emitter supports only direct non-variadic calls")
 		return ""
 	}
 	function := emitValue(e, callee)
+	collection := function.kind == "intrinsic" && (function.name == "prepend" || function.name == "head" || function.name == "tail" || function.name == "get" || function.name == "put" || function.name == "remove")
+	if (childAt(node, 0).kind != "Ident" && !collection && function.kind != "native") || (node.text != "" && !(function.kind == "intrinsic" && function.name == "append")) {
+		emitFail(e, node.at, "bootstrap emitter requires a supported direct call")
+		return ""
+	}
 	var codes List[string]
 	for _, argument := range tail(node.children) {
 		codes = append(codes, emitExpression(e, argument, false))
@@ -191,6 +219,9 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 	}
 	if function.kind == "func" {
 		return emitOrdered(e, codes, emitFunctionName(callee.text))
+	}
+	if collection {
+		return emitCollectionCall(e, node, function.name, codes)
 	}
 	if function.kind == "intrinsic" {
 		switch function.name {
@@ -215,15 +246,25 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 				emitFail(e, node.at, "panic requires a string reason")
 			}
 			return "erlang:error({linglang_panic, " + head(codes).value + "})"
+		case "append":
+			return emitAppend(e, node, codes)
 		case "len":
 			if defaultType(emitValue(e, childAt(node, 1)).typeID) == tString {
-				return "byte_size(" + head(codes).value + ")"
+				return emitOrdered(e, codes, "byte_size")
+			}
+			kind := get(e.checked.types, emitValue(e, childAt(node, 1)).typeID).value.kind
+			if kind == "list" || kind == "map" {
+				return emitOrdered(e, codes, "linglang_rt:"+kind+"_length")
 			}
 		}
 	}
 	if function.kind == "native" {
 		target := ""
 		switch function.name {
+		case "join":
+			target = "linglang_rt:text_join"
+		case "split":
+			target = "linglang_rt:text_split"
 		case "formatInt":
 			target = "linglang_rt:format_int"
 		case "trim":

@@ -141,8 +141,8 @@ func emitPackage(files List[SyntaxNode]) EmitResult {
 					mainFound = true
 				}
 				reversed = prepend(emitFunction(&e, declaration), reversed)
-			} else if declaration.kind != "GenDecl" || declaration.text != "const" {
-				emitFail(&e, declaration.at, "bootstrap emitter supports only functions and top-level constants")
+			} else if declaration.kind != "GenDecl" || (declaration.text != "const" && declaration.text != "type") {
+				emitFail(&e, declaration.at, "bootstrap emitter supports functions, structs, and top-level constants")
 			}
 		}
 	}
@@ -166,8 +166,8 @@ func emitFunction(e *Emitter, node SyntaxNode) string {
 		emitFail(e, name.at, "init and blank function declarations are unsupported")
 	}
 	signature := get(e.checked.types, emitDefinition(e, name).typeID).value
-	if signature.result != tVoid && !emitPrimitive(signature.result) {
-		emitFail(e, name.at, "bootstrap emitter supports int, bool, and string results")
+	if signature.result != tVoid {
+		emitRequireType(e, signature.result, name.at)
 	}
 	if signature.result != tVoid && !emitTerminates(e, childAt(node, 3)) {
 		emitFail(e, name.at, "missing return")
@@ -189,9 +189,7 @@ func emitFunction(e *Emitter, node SyntaxNode) string {
 		}
 	}
 	for _, id := range signature.params {
-		if !emitPrimitive(id) {
-			emitFail(e, name.at, "bootstrap emitter supports int, bool, and string parameters")
-		}
+		emitRequireType(e, id, name.at)
 	}
 	e.ret = emitFresh(e)
 	setup = append(setup, e.ret+" = make_ref()")
@@ -223,7 +221,7 @@ func emitTerminates(e *Emitter, node SyntaxNode) bool {
 	if node.kind == "ExprStmt" {
 		call := childAt(node, 0)
 		if call.kind == "CallExpr" {
-			callee := emitValue(e, childAt(call, 0))
+			callee := emitValue(e, emitCallee(childAt(call, 0)))
 			return callee.kind == "intrinsic" && callee.name == "panic"
 		}
 	}

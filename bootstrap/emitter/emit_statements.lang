@@ -10,16 +10,6 @@ func emitBlock(e *Emitter, node SyntaxNode) string {
 	return emitScope(join(parts, ",\n        "))
 }
 
-func emitZero(id int) string {
-	if id == tString {
-		return "<<>>"
-	}
-	if id == tBool {
-		return "false"
-	}
-	return "0"
-}
-
 func emitVariables(e *Emitter, node SyntaxNode) string {
 	if node.text == "const" {
 		return "ok"
@@ -38,10 +28,8 @@ func emitVariables(e *Emitter, node SyntaxNode) string {
 		}
 		name := head(names).value
 		id := emitDefinition(e, name).typeID
-		if !emitPrimitive(id) {
-			emitFail(e, name.at, "bootstrap emitter supports int, bool, and string variables")
-		}
-		value := emitZero(id)
+		emitRequireType(e, id, name.at)
+		value := emitZero(e, id, name.at)
 		if head(values).ok {
 			value = emitExpression(e, head(values).value, false)
 		}
@@ -59,21 +47,19 @@ func emitAssignment(e *Emitter, node SyntaxNode) string {
 	}
 	target := head(lhs).value
 	value := emitExpression(e, head(rhs).value, false)
-	if target.kind != "Ident" {
-		emitFail(e, target.at, "bootstrap emitter requires an identifier assignment target")
-		return ""
-	}
-	if target.text == "_" {
+	if target.kind == "Ident" && target.text == "_" {
 		return emitScope(value)
 	}
 	if node.text == ":=" {
 		id := emitDefinition(e, target).typeID
-		if !emitPrimitive(id) {
-			emitFail(e, target.at, "bootstrap emitter supports int, bool, and string variables")
-		}
+		emitRequireType(e, id, target.at)
 		return emitCell(e, target, true) + " = linglang_rt:new(" + emitScope(value) + ")"
 	}
-	cell := emitCell(e, target, false)
+	// Evaluate and root the destination before the RHS can overwrite its last
+	// alias or collect. Read a compound-assignment value before evaluating RHS.
+	address := emitAddress(e, target)
+	cell := emitFresh(e)
+	setup := cell + " = " + address + ", linglang_rt:keep(" + cell + "), "
 	if node.text != "=" {
 		op := slice(node.text, 0, len(node.text)-1)
 		if op == "<<" || op == ">>" {
@@ -81,11 +67,24 @@ func emitAssignment(e *Emitter, node SyntaxNode) string {
 		}
 		value = emitOrdered(e, List[string]{"linglang_rt:read(" + cell + ")", value}, "fun(A, B) -> linglang_rt:binary("+emitOperator(op)+", A, B) end")
 	}
-	return emitScope("linglang_rt:write(" + cell + ", " + value + ")")
+	return emitScope(setup + "linglang_rt:write(" + cell + ", " + value + ")")
 }
 
 func emitFor(e *Emitter, node SyntaxNode) string {
-	init := emitStatement(e, childAt(node, 0))
+	initializer := childAt(node, 0)
+	init := emitStatement(e, initializer)
+	initial := ""
+	iteration := ""
+	key := ""
+	if initializer.kind == "AssignStmt" && initializer.text == ":=" {
+		name := head(childAt(initializer, 0).children).value
+		if name.kind == "Ident" && name.text != "_" {
+			key = sourceIdentity(name.at)
+			initial = emitCell(e, name, true)
+			iteration = emitFresh(e)
+			e.cells = put(e.cells, key, iteration)
+		}
+	}
 	condition := "true"
 	if childAt(node, 1).kind != "nil" {
 		condition = emitExpression(e, childAt(node, 1), false)
@@ -95,8 +94,10 @@ func emitFor(e *Emitter, node SyntaxNode) string {
 	e.loops = prepend(loop, e.loops)
 	body := emitStatement(e, childAt(node, 3))
 	e.loops = tail(e.loops)
-	// The supported variables are primitive values; their identity cannot
-	// escape. One cell per loop initializer suffices until pointers are added.
+	if iteration != "" {
+		e.cells = put(e.cells, key, initial)
+		return emitScope(init + ", " + loop + " = make_ref(), linglang_rt:loop_cell(fun(" + iteration + ") -> " + condition + " end, fun(" + iteration + ") -> " + body + " end, fun(" + iteration + ") -> " + post + " end, " + loop + ", " + initial + ")")
+	}
 	return emitScope(init + ", " + loop + " = make_ref(), linglang_rt:loop(fun() -> " + condition + " end, fun() -> " + body + " end, fun() -> " + post + " end, " + loop + ")")
 }
 
@@ -109,6 +110,8 @@ func emitStatement(e *Emitter, node SyntaxNode) string {
 		return "ok"
 	case "BlockStmt":
 		return emitBlock(e, node)
+	case "RangeStmt":
+		return emitRange(e, node)
 	case "ForStmt":
 		return emitFor(e, node)
 	case "BranchStmt":
@@ -131,15 +134,12 @@ func emitStatement(e *Emitter, node SyntaxNode) string {
 		return emitScope("throw({linglang_return, " + e.ret + ", " + value + "})")
 	case "IncDecStmt":
 		target := childAt(node, 0)
-		if target.kind != "Ident" {
-			emitFail(e, target.at, "bootstrap emitter requires an identifier increment target")
-		}
 		op := "add"
 		if node.text == "--" {
 			op = "sub"
 		}
-		cell := emitCell(e, target, false)
-		return emitScope("linglang_rt:write(" + cell + ", linglang_rt:binary(" + op + ", linglang_rt:read(" + cell + "), 1))")
+		cell := emitFresh(e)
+		return emitScope(cell + " = " + emitAddress(e, target) + ", linglang_rt:keep(" + cell + "), linglang_rt:write(" + cell + ", linglang_rt:binary(" + op + ", linglang_rt:read(" + cell + "), 1))")
 	case "IfStmt":
 		if childAt(node, 0).kind != "nil" {
 			emitFail(e, node.at, "bootstrap emitter does not support if initializers")

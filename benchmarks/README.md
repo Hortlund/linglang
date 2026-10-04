@@ -202,3 +202,65 @@ state, OTP version, and scheduler settings can change the numbers.
 There are no timing thresholds in CI. `go test ./cmd/bench` runs the available
 implementations and verifies correctness, root cleanup, report output, and
 failure handling, including deliberately wrong Go and Elixir answers.
+
+## Bootstrap compiler phases
+
+```sh
+go run ./cmd/bench -frontend -samples 7 -warmup 2 -out _build/benchmarks/frontend.json
+```
+
+This mode measures the Linglang-written compiler on both seed backends, using
+one BEAM scheduler, rotated backend order, and a fresh process per sample. The
+fixed corpus for lexing, parsing, resolving, and checking is `bootstrap/lexer`
+without test files. Emission uses `examples/bootstrap_demo`, which fits the
+current emitter subset. The report records each corpus's source paths, a source
+fingerprint covering the corpus, compiler, driver and runtime, result counts,
+median/p95 timings, reductions, managed allocations, peak cells, and collections.
+Use the same checkout path for comparisons: source locations include absolute
+filenames. `-frontend` cannot be combined with `-compare` or `-workload`.
+
+Compilation, file reads, VM startup, and prerequisite parsing are outside the
+timed interval. `check` requests expression/binding metadata, as emission needs;
+it includes the resolver internally. `emit` includes resolution and checking
+internally, as well as module generation. These are entry-point costs, not
+disjoint passes that can be added together. Allocation/collection counters are
+differences from the end of preparation; the peak counter is reset before timing.
+Inputs are immutable pointer-free values. Managed-cell cleanup is checked after
+preparation and after each measured or warmup run. Each run checks success and a
+positive result count; measured counts must agree across samples and backends.
+Semantic correctness remains covered by the separate seed oracle suites.
+
+The initial local baseline is `_build/benchmarks/frontend-before.json`. It used
+three measured samples and one warmup per backend on macOS ARM64 / OTP 29.
+Optimized checking took a median 144.036 ms; cell-backend checking took
+9,763.453 ms. This small baseline helps select profiling targets; it does not
+establish a performance threshold. Preserve the report when measuring changes.
+
+### Internal identity construction
+
+A call-time profile of checker metadata construction found over 40,000 filename
+byte visits in `quotedText` on the lexer corpus (relative source paths). Internal
+keys now use a raw filename followed by `:` and a decimal offset/node ID. The
+last colon separates the position unambiguously, even when filenames contain
+colons, quotes, Unicode, or newlines. Diagnostic quoting is unchanged.
+
+A fresh same-path comparison on macOS ARM64 / OTP 29, with three samples and one
+warmup per backend, produced these medians:
+
+| Entry point | Optimized before / after (ms) | Cells before / after (ms) |
+| --- | ---: | ---: |
+| check | 148.759 / 45.607 | 9,679.850 / 1,976.776 |
+| emit | 24.251 / 9.806 | 232.579 / 62.410 |
+
+Optimized checker reductions fell from about 22.19 million to 5.62 million;
+cell checker allocations fell from 447,871 to 100,884. Lex/parse/resolve
+reductions stayed essentially unchanged. The checker performs no emission, so
+its improvement isolates the shared identity change; the emission comparison
+also includes newly supported collections and range loops. These small local
+samples show a substantial improvement on this corpus, not a general language
+speedup or a CI timing threshold.
+
+Raw reports: `_build/benchmarks/frontend-collections-before.json` and
+`frontend-collections-after.json`. Call-time profiles are saved as
+`profile-check-before.txt` and `profile-check-after.txt` in the same directory.
+Profiling adds overhead; the timings above come from uninstrumented runs.

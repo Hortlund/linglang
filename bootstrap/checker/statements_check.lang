@@ -149,6 +149,7 @@ func checkStatement(c *Checker, scope *TypeScope, node SyntaxNode, result int) {
 			if name.kind != "nil" && name.text != "_" {
 				if node.text == ":=" {
 					bindType(&block, name.text, "var", id)
+					rememberDefinition(c, &block, name)
 				} else {
 					requireType(c, name, expressionValue(id), assignmentTarget(c, scope, name).typeID)
 				}

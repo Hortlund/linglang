@@ -28,7 +28,7 @@ func TestCheckedMetadata() {
 
 func TestEmitterBoundaries() {
 	for _, source := range (List[string]{
-		"func main(){for range (List[int]{1}) {}}",
+		"func main(){for range (Map[int,int]{1:2}) {}}",
 		"func main(){n:=30;println('a'<<n)}",
 		"func main(){n:=30;println('a'>>n)}",
 		"func main(){n:=30;println(('a'<<n)==0)}",
@@ -40,9 +40,9 @@ func TestEmitterBoundaries() {
 		"func main(){n:=30;panic('a'<<n)}",
 
 		"func main(){if x:=1;x>0{println(x)}}",
-		"type N struct{x int};func main(){println(N{})}",
-		"func main(){x:=1;p:=&x;println(*p)}",
-		"func main(){println(List[int]{1})}",
+		"type N struct{x Map[string,int]};func main(){println(new(N))}",
+		"type N struct{x int};func main(){println(new(N))}",
+		"type N struct{x int};func main(){println(N{1})}",
 		"func f(n int)int{if n>0{return 1}};func main(){}",
 		"func f()int{for{break}};func main(){}",
 		"func f()int{for true{return 1}};func main(){}",
@@ -50,6 +50,8 @@ func TestEmitterBoundaries() {
 		"func main(){startSupervisor(1,100)}",
 		"func main(){x,y:=1,2;println(x,y)}",
 		"func main(){switch{default:}}",
+		"func main(){println(List[int]{1:2})}",
+		"func main(){println(List[*int]{{}})}",
 	}) {
 		parsed := parse("unsupported.lang", "package main\n"+source)
 		assert(parsed.ok)
@@ -68,15 +70,100 @@ func TestEmitterLoops() {
 		parsed := parse("loops.lang", "package main\n"+source)
 		assert(parsed.ok)
 		result := emitPackage(List[SyntaxNode]{parsed.root})
-		assert(result.ok && result.reason == "" && len(split(result.module, "linglang_rt:loop(")) > 1)
+		assert(result.ok && result.reason == "" && (len(split(result.module, "linglang_rt:loop(")) > 1 || len(split(result.module, "linglang_rt:loop_cell(")) > 1))
+	}
+}
+
+func TestEmitterReferences() {
+	for _, source := range (List[string]{
+		"type N struct{x int;next *N};func main(){n:=N{x:1};n.next=&n;println(n.next.x)}",
+		"type N struct{x int};func f(n int)*N{return &N{x:n}};func main(){p:=f(3);p.x++;println(*p)}",
+		"func main(){x:=1;p:=&x;q:=&p;**q+=2;println(x)}",
+		"type N struct{x int};func main(){var n N;p:=&N{};p.x=2;println(n.x,p.x)}",
+	}) {
+		parsed := parse("references.lang", "package main\n"+source)
+		assert(parsed.ok)
+		result := emitPackage(List[SyntaxNode]{parsed.root})
+		assert(result.ok && result.reason == "" && len(result.module) > 0)
 	}
 }
 
 func TestEmitterFileOrder() {
-	a := parse("a.lang", "package main\nfunc answer()int{return 42}")
-	b := parse("b.lang", "package main\nfunc main(){println(answer())}")
+	a := parse("a:\"雪\n.lang", "package main\nfunc answer()*Box{return &Box{value:42}}")
+	b := parse("a:\"雪\n.lang:1", "package main\ntype Box struct{value int};func main(){println(answer().value)}")
 	first := emitPackage(List[SyntaxNode]{a.root, b.root})
 	second := emitPackage(List[SyntaxNode]{b.root, a.root})
 	assert(first.ok && second.ok && first.module == second.module)
 	assert(!emitPackage(List[SyntaxNode]{a.root, a.root}).ok)
+}
+
+func TestEmitterCollections() {
+	for _, source := range (List[string]{
+		"type N struct{xs List[N];m Map[string,*N]};func main(){var n N;println(len(n.xs),len(n.m));xs:=List[int]{1,2};for i,v:=range xs{println(i,v)};println(head(xs).value)}",
+		"func main(){var d Delivery[bool];xs:=append(List[bool]{},true);xs=append(xs,List[bool]{false}...);println(d.value,d.ok,head(xs).value);m:=put(nil,1,xs);println(head(get(m,1).value).ok)}",
+		"func main(){println((head[int])(nil).ok,(get[string,int])(nil,\"x\").value,join(split(\"a,b\",\",\"),\"-\"))}",
+	}) {
+		parsed := parse("collections.lang", "package main\n"+source)
+		assert(parsed.ok)
+		result := emitPackage(List[SyntaxNode]{parsed.root})
+		assert(result.ok && result.reason == "" && len(result.module) > 0)
+	}
+}
+
+func TestRangeBindings() {
+	parsed := parse("range.lang", "package main\nfunc main(){for i,v:=range (List[int]{1}){println(i,v)}}")
+	checked := checkPackageInfo(List[SyntaxNode]{parsed.root}, true)
+	assert(parsed.ok && checked.ok && len(checked.definitions) == 3)
+	loop := head(childAt(head(tail(parsed.root.children)).value, 3).children).value
+	assert(get(checked.definitions, sourceIdentity(childAt(loop, 0).at)).value.typeID == tInt)
+	assert(get(checked.definitions, sourceIdentity(childAt(loop, 1).at)).value.typeID == tInt)
+}
+
+func TestMapKeyBindings() {
+	parsed := parse("keys.lang", "package main\ntype S struct{key int};func f(key string)Map[string,int]{return Map[string,int]{key:7}};func main(){key:=2;s:=S{key:3};_=s;{key:=4;_=Map[int,int]{key:5}};_=Map[int,int]{key:6}}")
+	assert(parsed.ok)
+	checked := checkPackageInfo(List[SyntaxNode]{parsed.root}, true)
+	assert(checked.ok)
+	var deferred Map[string, bool]
+	for _, at := range checked.bindings.deferred {
+		deferred = put(deferred, sourceIdentity(at), true)
+	}
+	// Independently walk the parsed AST to distinguish field and Map keys, then
+	// verify that only runtime Map keys become references to their declarations.
+	pending := List[SyntaxNode]{parsed.root}
+	count := 0
+	fields := 0
+	for head(pending).ok {
+		node := head(pending).value
+		pending = tail(pending)
+		if node.kind == "CompositeLit" {
+			kind := get(checked.types, get(checked.expressions, expressionIdentity(node)).value.typeID).value.kind
+			for _, element := range tail(node.children) {
+				key := childAt(element, 0)
+				if key.kind == "Ident" {
+					found := false
+					for _, reference := range checked.bindings.references {
+						if sourceIdentity(reference.at) == sourceIdentity(key.at) {
+							assert(kind == "map" && reference.symbol.name == key.text)
+							assert(get(checked.definitions, sourceIdentity(reference.symbol.at)).ok)
+							assert(reference.symbol.at.offset < key.at.offset)
+							found = true
+						}
+					}
+					if kind == "map" {
+						assert(found && !get(deferred, sourceIdentity(key.at)).ok)
+						count++
+					} else {
+						assert(!found && get(deferred, sourceIdentity(key.at)).ok)
+						fields++
+					}
+				}
+			}
+		}
+		for _, child := range node.children {
+			pending = prepend(child, pending)
+		}
+	}
+	assert(count == 3 && fields == 1)
+	assert(emitPackage(List[SyntaxNode]{parsed.root}).ok)
 }

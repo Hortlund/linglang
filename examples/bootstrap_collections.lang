@@ -1,0 +1,26 @@
+package main
+
+type Item struct{ value int }
+
+func main() {
+	items := List[*Item]{&Item{value: 4}, &Item{value: 5}, &Item{value: 6}}
+	original := items
+	total := 0
+	var indices List[*int]
+	for i, item := range items {
+		items = nil
+		indices = append(indices, &i)
+		total += item.value
+	}
+	println("snapshot total:", total)
+	values := Map[string, *Item]{"bean": head(tail(original)).value}
+	changed := put(values, "bean", &Item{value: 20})
+	println("map values:", get(values, "bean").value.value, get(changed, "bean").value.value)
+	var saved List[int]
+	for _, index := range indices {
+		saved = append(saved, *index)
+	}
+	println("iteration values:", head(saved).value, head(tail(saved)).value, head(tail(tail(saved))).value)
+	missing := get[string, int](nil, "absent")
+	println("missing value:", missing.value, missing.ok)
+}

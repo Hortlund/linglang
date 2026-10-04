@@ -29,6 +29,7 @@ type sample struct {
 	Collections      int     `json:"managed_collections"`
 	GoAllocations    *uint64 `json:"go_allocations,omitempty"`
 	GoAllocatedBytes *uint64 `json:"go_allocated_bytes,omitempty"`
+	ResultCount      *int    `json:"result_count,omitempty"`
 }
 
 var workloads = []string{"arithmetic", "calls", "structs", "pointers", "lists", "maps", "strings", "messages"}
@@ -51,21 +52,22 @@ type summary struct {
 }
 
 type report struct {
-	Timestamp         string    `json:"timestamp"`
-	Platform          string    `json:"platform"`
-	OTP               string    `json:"otp"`
-	VM                string    `json:"vm"`
-	Go                string    `json:"go"`
-	NativeGo          string    `json:"native_go,omitempty"`
-	Elixir            string    `json:"elixir,omitempty"`
-	Variants          []string  `json:"variants"`
-	Schedulers        int       `json:"schedulers"`
-	GoMaxProcs        int       `json:"go_max_procs,omitempty"`
-	SamplesPerVariant int       `json:"samples_per_variant"`
-	WarmupPerVariant  int       `json:"warmup_per_variant"`
-	SourceSHA256      string    `json:"source_sha256"`
-	Samples           []sample  `json:"samples"`
-	Summaries         []summary `json:"summaries"`
+	Timestamp         string              `json:"timestamp"`
+	Platform          string              `json:"platform"`
+	OTP               string              `json:"otp"`
+	VM                string              `json:"vm"`
+	Go                string              `json:"go"`
+	NativeGo          string              `json:"native_go,omitempty"`
+	Elixir            string              `json:"elixir,omitempty"`
+	Variants          []string            `json:"variants"`
+	Schedulers        int                 `json:"schedulers"`
+	GoMaxProcs        int                 `json:"go_max_procs,omitempty"`
+	SamplesPerVariant int                 `json:"samples_per_variant"`
+	WarmupPerVariant  int                 `json:"warmup_per_variant"`
+	SourceSHA256      string              `json:"source_sha256"`
+	Samples           []sample            `json:"samples"`
+	Summaries         []summary           `json:"summaries"`
+	Corpora           map[string][]string `json:"corpora,omitempty"`
 }
 
 func main() {
@@ -81,9 +83,20 @@ func run() error {
 	workload := flag.String("workload", "all", "one workload: "+strings.Join(workloads, ", ")+", or all")
 	output := flag.String("out", "_build/benchmarks/results.json", "JSON result file")
 	compare := flag.Bool("compare", false, "compare optimized linglang, Erlang, Elixir, and Go (requires elixir)")
+	frontend := flag.Bool("frontend", false, "measure bootstrap lexer/parser/resolver/checker/emitter phases")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flag.Args(), " "))
+	}
+	if *frontend {
+		if *compare || *workload != "all" {
+			return fmt.Errorf("-frontend cannot be combined with -compare or -workload")
+		}
+		if *output == "_build/benchmarks/results.json" {
+			*output = "_build/benchmarks/frontend.json"
+		}
+		_, err := runFrontendBench(*samples, *warmup, ".", "_build/benchmarks/frontend", *output, os.Stdout)
+		return err
 	}
 	selected := workloads
 	if *workload != "all" {

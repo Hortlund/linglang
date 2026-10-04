@@ -1,0 +1,131 @@
+package main
+
+func emitFieldName(name string) string { return "field_" + emitHex(name) }
+
+// Traverse pointer cycles once, rejecting unsupported nested types before code
+// reaches OTP. Pointer zeros do not recursively construct their target values.
+func emitRequireType(e *Emitter, id int, at Token) {
+	if emitPrimitive(id) {
+		return
+	}
+	pending := List[int]{id}
+	var seen Map[int, bool]
+	for head(pending).ok && e.reason == "" {
+		current := head(pending).value
+		pending = tail(pending)
+		if get(seen, current).ok {
+			continue
+		}
+		seen = put(seen, current, true)
+		t := get(e.checked.types, current).value
+		if t.kind == "pointer" || t.kind == "list" || t.kind == "delivery" {
+			pending = prepend(t.elem, pending)
+		} else if t.kind == "map" {
+			if t.key != tInt && t.key != tString {
+				emitFail(e, at, "Map keys must be int or string")
+			}
+			pending = prepend(t.elem, pending)
+		} else if t.kind == "struct" {
+			for _, field := range t.fields {
+				pending = prepend(field.typeID, pending)
+			}
+		} else if !emitPrimitive(current) {
+			emitFail(e, at, "bootstrap emitter does not support this value type")
+		}
+	}
+}
+
+func emitZero(e *Emitter, id int, at Token) string {
+	if id == tString {
+		return "<<>>"
+	}
+	if id == tBool {
+		return "false"
+	}
+	if id == tInt {
+		return "0"
+	}
+	t := get(e.checked.types, id).value
+	if t.kind == "pointer" || t.kind == "list" || t.kind == "map" {
+		return "nil"
+	}
+	e.depth++
+	if e.depth > 128 || e.reason != "" {
+		emitFail(e, at, "bootstrap zero value nesting exceeds 128 levels")
+		e.depth--
+		return ""
+	}
+	fieldsToEmit := t.fields
+	if t.kind == "delivery" {
+		fieldsToEmit = List[CheckedField]{CheckedField{name: "value", typeID: t.elem}, CheckedField{name: "ok", typeID: tBool}}
+	}
+	var reversed List[string]
+	for _, field := range fieldsToEmit {
+		reversed = prepend(emitFieldName(field.name)+" => "+emitZero(e, field.typeID, at), reversed)
+	}
+	var fields List[string]
+	for _, field := range reversed {
+		fields = prepend(field, fields)
+	}
+	e.depth--
+	return "#{" + join(fields, ", ") + "}"
+}
+
+func emitAddress(e *Emitter, node SyntaxNode) string {
+	switch node.kind {
+	case "ParenExpr":
+		return emitAddress(e, childAt(node, 0))
+	case "Ident":
+		return emitCell(e, node, false)
+	case "StarExpr":
+		return "linglang_rt:deref(" + emitExpression(e, childAt(node, 0), false) + ")"
+	case "SelectorExpr":
+		base := childAt(node, 0)
+		code := ""
+		if get(e.checked.types, emitValue(e, base).typeID).value.kind == "pointer" {
+			code = emitExpression(e, base, false)
+		} else {
+			code = emitAddress(e, base)
+		}
+		return "linglang_rt:field(" + code + ", " + emitFieldName(childAt(node, 1).text) + ")"
+	case "CompositeLit":
+		return "linglang_rt:new(" + emitExpression(e, node, false) + ")"
+	}
+	emitFail(e, node.at, "bootstrap emitter does not support reference target "+node.kind)
+	return ""
+}
+
+func emitStruct(e *Emitter, node SyntaxNode, id int) string {
+	emitRequireType(e, id, node.at)
+	if get(e.checked.types, id).value.kind != "struct" && get(e.checked.types, id).value.kind != "delivery" {
+		emitFail(e, node.at, "bootstrap emitter requires a struct literal")
+		return ""
+	}
+	var setup List[string]
+	var fields List[string]
+	for _, element := range tail(node.children) {
+		if element.kind != "KeyValueExpr" {
+			emitFail(e, element.at, "struct literals require named fields")
+			return ""
+		}
+		value := emitFresh(e)
+		code := emitExpression(e, childAt(element, 1), false)
+		setup = prepend(value+" = "+code, setup)
+		setup = prepend("linglang_rt:keep("+value+")", setup)
+		fields = prepend(emitFieldName(childAt(element, 0).text)+" := "+value, fields)
+	}
+	zero := emitZero(e, id, node.at)
+	if !head(fields).ok {
+		return zero
+	}
+	var orderedFields List[string]
+	for _, field := range fields {
+		orderedFields = prepend(field, orderedFields)
+	}
+	setup = prepend("("+zero+")#{"+join(orderedFields, ", ")+"}", setup)
+	var ordered List[string]
+	for _, part := range setup {
+		ordered = prepend(part, ordered)
+	}
+	return "(begin " + join(ordered, ", ") + " end)"
+}

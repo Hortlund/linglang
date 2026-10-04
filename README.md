@@ -791,20 +791,30 @@ and emitter. the existing runtime still handles managed cells and GC scopes.
 no Go sneaking into the compilation step wearing a fake moustache.
 
 pass explicit source files from one package. functions, recursion, primitive
-`int`/`bool`/`string` variables, constants, arithmetic, bitwise operations, direct
-calls, returns, blocks, `if`/`else`, and `for` loops work. nested loops, `break`,
-`continue`, and returns from inside loops use the existing BEAM runtime.
-printing, string `len`, `formatInt`, `trim`, `byteAt`, `slice`, `isLetter`,
-`isDigit`, `assert`, and string `panic` work too. the emitter sorts files,
-retains checked expression types and bindings,
-and rejects unsupported constructs with source locations before printing a module.
+`int`/`bool`/`string` variables, structs, pointers, constants, arithmetic, bitwise
+operations, direct calls, returns, blocks, `if`/`else`, and `for` loops work.
+nested loops, `break`, `continue`, and returns from inside loops use the existing
+BEAM runtime. printing, `len`, `formatInt`, `trim`, `byteAt`, `slice`, `join`,
+`split`, `isLetter`, `isDigit`, `assert`, and string `panic` work too.
 
-range loops, switches, structs, pointers, collections, OTP calls,
-multiple assignment, and `if` initializers still need the seed backend. runtime
-conversions support identity casts only; variable declarations need one named
-variable per spec. embedded constant strings are capped
-at 1 MiB and expression nesting at 128 levels. compiling the compiler itself
-is the next boss fight; this emitter cannot compile its own source yet.
+struct literals use named fields. struct assignment copies values; pointer
+assignment keeps aliases. `&`, `*`, field updates, returned locals, interior
+pointers, and cycles work. lists, maps, and `Delivery[T]` values support nested
+zero values and literals, `head`, `tail`, `prepend`, `append` (including `...`),
+`get`, `put`, and `remove`. list `range` keeps the original snapshot; `:=` gives
+each iteration fresh variables, while `=` updates existing variables.
+try `./bin/linglang-emitter examples/bootstrap_collections.lang`.
+
+the emitter sorts files, retains checked expression types and bindings,
+and rejects unsupported constructs with source locations before printing a module.
+switches, OTP calls, file/argument helpers, multiple assignment, and `if`
+initializers still need the seed backend. map range, indexed list literals, and
+elided pointer literals remain unsupported by both emitters. runtime conversions
+support identity casts only; variable declarations need one named variable per
+spec. embedded constant strings are capped at 1 MiB and expression/zero-value
+nesting at 128 levels. `new` and `make` still need backend support; use an addressed
+local or `&Struct{}`. compiling the compiler itself is the next boss fight;
+this emitter cannot compile its own source yet.
 
 the loop example counts three ASCII identifiers and sums 1,000 integers:
 
@@ -820,7 +830,7 @@ the program and runtime need to live in the same build directory.
 ```sh
 ./bin/linglang test --gc-stress --gc-stats --timeout 2m bootstrap/emitter
 ./bin/linglang test --no-opt --gc-stress --gc-stats --timeout 2m bootstrap/emitter
-./bin/linglang fmt --check bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang
+./bin/linglang fmt --check bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang examples/bootstrap_collections.lang
 ```
 
 ## why
