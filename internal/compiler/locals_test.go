@@ -128,6 +128,20 @@ func len(s string) *Node { for n := 0; n < 30; n++ { _ = &Node{n:n} }; return &N
 func read() int { p := len(""); _ = len(""); return p.n }
 func main() { println(read()) }
 `, "42\n"},
+		{"collection_leaf_root_handoff", `
+type Node struct { n int }
+func node(n int) *Node { return &Node{n:n} }
+func churn() int { for i:=0;i<30;i++{_=node(i)};return 9 }
+func packed(p *Node) Map[int,List[*Node]] { return put(Map[int,List[*Node]]{},1,append(List[*Node]{},p)) }
+func unpacked(m Map[int,List[*Node]]) *Node { return head(get(m,1).value).value }
+func consume(m Map[int,List[*Node]], n int) { println(unpacked(m).n,n) }
+func main() {
+ consume(packed(node(7)),churn())
+ p:=unpacked(packed(node(8)))
+ _=churn()
+ println(p.n)
+}
+`, "7 9\n8\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -147,6 +161,7 @@ func TestBorrowedRootLeafLowering(t *testing.T) {
 		{name: "pointer_update", body: "*p++; return *p", borrow: true},
 		{name: "pointer_local", body: "var alias *int = p; return *alias", borrow: true},
 		{name: "noncollecting_intrinsics", body: "assert(*p >= 0); _ = formatInt(*p); return *p", borrow: true},
+		{name: "native_collections", body: "xs:=append(List[*int]{},p);xs=prepend(p,tail(xs));m:=put(Map[int,*int]{},1,head(xs).value);return *get(m,1).value", borrow: true},
 		{name: "managed_local", body: "n := 1; q := &n; return *q + *p"},
 		{name: "managed_literal", prefix: "type Node struct { n int }", body: "q := &Node{n:1}; return q.n + *p"},
 		{name: "user_call", prefix: "func value() int { return 1 }", body: "return value() + *p"},
@@ -171,6 +186,51 @@ func TestBorrowedRootLeafLowering(t *testing.T) {
 			protocol := strings.Contains(body, "linglang_rt:scope(") || strings.Contains(body, "linglang_rt:roots(") || strings.Contains(body, "linglang_rt:safepoint()") || strings.Contains(body, "linglang_rt:keep(")
 			if protocol == tc.borrow {
 				t.Fatalf("borrow=%v, root protocol=%v:\n%s", tc.borrow, protocol, body)
+			}
+		})
+	}
+}
+
+func TestLeafCallerSafePoints(t *testing.T) {
+	if _, err := Compile("bodyless.lang", []byte("package main\nfunc helper()\nfunc main(){helper()}")); err == nil || !strings.Contains(err.Error(), "bodyless") {
+		t.Fatalf("bodyless declaration: %v", err)
+	}
+	for _, tc := range []struct {
+		name, helper, main string
+		safePoints         bool
+	}{
+		{"arithmetic", "func helper(n int) int { return n+1 }", "n:=0;for n<3{n=helper(n)}", false},
+		{"branch", "func helper(n int) int { if n>0{return n};return -n }", "_=helper(-1)", false},
+		{"allocation", "func helper(n int) int { p:=&n;return *p }", "_=helper(1)", true},
+		{"callee_loop", "func helper(n int) int { for n<3{n++};return n }", "_=helper(1)", true},
+		{"recursive", "func helper(n int) int { if n==0{return 0};return helper(n-1) }", "_=helper(2)", true},
+		{"indirect", "func helper(n int) int { return other(n) };func other(n int) int { return n+1 }", "_=helper(1)", true},
+		{"shadowed_intrinsic", "func helper(n int) int { return len(n) };func len(n int) int { p:=&n;return *p }", "_=helper(1)", true},
+		{"rooted_caller", "func helper(n int) int { return n+1 }", "n:=1;p:=&n;for *p<3{*p=helper(*p)}", true},
+		{"blocking", "func helper(n int) int { return receive[int](n).value }", "_=helper(0)", true},
+		{"native_collections", "func helper(n int) int { return n }", "xs:=prepend(1,List[int]{});xs=append(xs,2);xs=tail(xs);m:=put(Map[int,int]{},1,head(xs).value);assert(get(m,1).value==2);_=remove(m,1)", false},
+		{"native_text", "func helper(n int) int { return n }", "xs:=split(\"1,2\",\",\");s:=join(xs,\"\");assert(parseInt(trim(s)).value==12)", false},
+		{"rooted_collections", "func helper(n int) int { return n }", "n:=1;xs:=prepend(&n,List[*int]{});for len(xs)>0{xs=tail(xs)}", true},
+		{"builtin_shadow", "func helper(n int) int { return n };func len(n int) int { p:=&n;return *p }", "_=len(1)", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Put the caller before a callee in another file; discovery must not
+			// depend on declaration order or classify by spelling alone.
+			program, err := CompileFiles([]SourceFile{
+				{Filename: "a.lang", Source: []byte("package main\nfunc main(){" + tc.main + "}")},
+				{Filename: "z.lang", Source: []byte("package main\n" + tc.helper)},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			start := strings.Index(program, "\n"+functionName("main")+"(")
+			end := strings.Index(program, "\n"+functionName("helper")+"(")
+			if start < 0 || end <= start {
+				t.Fatal("missing caller/callee definitions")
+			}
+			body := program[start:end]
+			if got := strings.Contains(body, "linglang_rt:safepoint()"); got != tc.safePoints {
+				t.Fatalf("safe points=%v, want %v:\n%s", got, tc.safePoints, body)
 			}
 		})
 	}

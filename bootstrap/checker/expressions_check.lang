@@ -341,13 +341,13 @@ func callExpression(c *Checker, scope *TypeScope, node SyntaxNode) CheckedValue 
 		if baseParenthesized {
 			checkFail(c, callee.at, "generic function needs instantiation before parentheses")
 		}
-		if parenthesized && len(explicit) == 0 && (name == "head" || name == "tail" || name == "prepend" || name == "get" || name == "put" || name == "remove" || name == "send" || name == "spawn" || name == "spawnMonitor" || name == "supervise") {
+		if parenthesized && len(explicit) == 0 && (name == "head" || name == "tail" || name == "prepend" || name == "get" || name == "put" || name == "remove" || name == "send" || name == "sendAfter" || name == "spawn" || name == "spawnMonitor" || name == "supervise") {
 			checkFail(c, callee.at, "generic function needs instantiation inside parentheses")
 		}
 		if parenthesized && (name == "get" || name == "put" || name == "remove") && len(explicit) < 2 {
 			checkFail(c, callee.at, "parenthesized Map function needs both type arguments")
 		}
-		if (name == "receive" || name == "send" || name == "spawn" || name == "spawnMonitor" || name == "supervise" || name == "head" || name == "tail" || name == "prepend") && len(explicit) > 1 {
+		if (name == "receive" || name == "send" || name == "sendAfter" || name == "spawn" || name == "spawnMonitor" || name == "supervise" || name == "head" || name == "tail" || name == "prepend") && len(explicit) > 1 {
 			checkFail(c, callee.at, "too many type arguments")
 		}
 		if (name == "get" || name == "put" || name == "remove") && len(explicit) > 2 {
@@ -360,10 +360,11 @@ func callExpression(c *Checker, scope *TypeScope, node SyntaxNode) CheckedValue 
 			checkFail(c, node.at, "invalid variadic call")
 		}
 		id := nativeCall(c, scope, node, name, explicit, values)
+		message := nativeMessageType(c, node, name, explicit, values)
 		if name == "len" && valueAt(values, 0).constant.kind == "string" {
 			return checkedConstant(c, node, id, constantInteger(integerSmall(constantStringLength(valueAt(values, 0).constant))))
 		}
-		return expressionValue(id)
+		return CheckedValue{kind: "value", typeID: id, messageType: message}
 	}
 	if head(explicit).ok || node.text == "..." {
 		checkFail(c, node.at, "function is not generic or variadic")

@@ -14,6 +14,7 @@ const processPrelude = `package main
 type Pid chan int
 type Monitor chan bool
 type Supervisor chan string
+type Timer chan int
 type Process struct { pid Pid; monitor Monitor }
 type ChildOptions struct { restart string; shutdownMillis int }
 type Child struct { pid Pid; ok bool; reason string }
@@ -27,6 +28,8 @@ func self() Pid { return nil }
 func spawn[T any](worker func(T), args T) Pid { return nil }
 func spawnMonitor[T any](worker func(T), args T) Process { return Process{} }
 func send[T any](pid Pid, value T) {}
+func sendAfter[T any](pid Pid, value T, delayMillis int) Timer { return nil }
+func cancelTimer(timer Timer) bool { return false }
 func receive[T any](timeout int) Delivery[T] { return Delivery[T]{} }
 func monitor(pid Pid) Monitor { return nil }
 func wait(watcher Monitor, timeout int) Exit { return Exit{} }
@@ -85,7 +88,7 @@ func (c *compiler) processType(t types.Type, name string) bool {
 }
 
 func (c *compiler) opaqueProcessType(t types.Type) bool {
-	return c.processType(t, "Pid") || c.processType(t, "Monitor") || c.processType(t, "Supervisor")
+	return c.processType(t, "Pid") || c.processType(t, "Monitor") || c.processType(t, "Supervisor") || c.processType(t, "Timer")
 }
 
 // The schema is both the selective-receive tag and a runtime validator. Named
@@ -127,6 +130,9 @@ func (c *compiler) messageSchemaSeen(t types.Type, seen map[types.Type]bool) (st
 	}
 	if c.processType(t, "Monitor") {
 		return "", fmt.Errorf("monitor handles belong to their creating process")
+	}
+	if c.processType(t, "Timer") {
+		return "", fmt.Errorf("timer handles belong to their creating process")
 	}
 	if c.processType(t, "Supervisor") {
 		return "", fmt.Errorf("supervisor handles belong to their creating process; share supervisorPid instead")
@@ -182,7 +188,7 @@ func (c *compiler) processCall(call *ast.CallExpr) (string, bool, error) {
 	var schema string
 	var err error
 	switch name {
-	case "spawn", "spawnMonitor", "send":
+	case "spawn", "spawnMonitor", "send", "sendAfter":
 		schema, err = c.messageSchema(sig.Params().At(1).Type())
 	case "receive":
 		delivery := sig.Results().At(0).Type().(*types.Named)
@@ -248,6 +254,10 @@ func (c *compiler) processCall(call *ast.CallExpr) (string, bool, error) {
 			return "self()"
 		case "send":
 			return "linglang_rt:send_message(" + v[0] + ", " + schema + ", " + v[1] + ")"
+		case "sendAfter":
+			return "linglang_rt:send_after(" + v[0] + ", " + schema + ", " + v[1] + ", " + v[2] + ")"
+		case "cancelTimer":
+			return "linglang_rt:cancel_timer(" + v[0] + ")"
 		case "receive":
 			t := sig.Results().At(0).Type().(*types.Named).TypeArgs().At(0)
 			return "linglang_rt:receive_message(" + schema + ", " + v[0] + ", " + c.zero(t) + ")"

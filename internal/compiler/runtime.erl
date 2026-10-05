@@ -4,7 +4,7 @@
 -export([new/1, new/2, read/1, write/2, field/2, field_value/2, deref/1,
          binary/3, print/2, loop/4, loop_cell/5,
          list_length/1, list_append/2, list_prepend/2, list_head/2,
-         list_tail/1, list_first/1, list_more/1,
+         list_tail/1, list_first/1, list_more/1, list_range/4,
          map_length/1, map_get/3, map_put/3, map_remove/2,
          read_file/1, write_file/2, text_split/2, text_trim/1,
          source_files/1, build_program/5, run_program/4, bootstrap_main/3, bootstrap_run_main/4,
@@ -12,6 +12,7 @@
          text_byte/2, text_slice/3, text_join/2, text_rune/2, unicode_letter/1, unicode_digit/1,
          scope/1, keep/1, roots/1, safepoint/0, collect/0, stats/0, set_gc_stress/1,
          spawn_process/4, send_message/3, receive_message/3,
+         send_after/4, cancel_timer/1,
          monitor_process/1, wait_process/2, demonitor_process/1,
          validate_message/2, gc_stress/0, run_worker/3, finish_process/0]).
 
@@ -22,6 +23,24 @@ send_message(Pid, Schema, Value) when is_pid(Pid) ->
     Pid ! {linglang_message, Schema, Value},
     ok;
 send_message(_, _, _) -> erlang:error(linglang_invalid_pid).
+
+%% Native BEAM timers retain immutable, validated message snapshots. There is
+%% no language-side timer registry to grow when discarded handles expire.
+send_after(Pid, Schema, Value, Milliseconds) when is_pid(Pid), node(Pid) =:= node() ->
+    validate_message(Schema, Value),
+    case Milliseconds of
+        N when is_integer(N), N >= 0, N =< 2147483647 ->
+            Ref = erlang:send_after(N, Pid, {linglang_message, Schema, Value}),
+            {linglang_timer, self(), Ref};
+        _ -> erlang:error(linglang_invalid_timeout)
+    end;
+send_after(_, _, _, _) -> erlang:error(linglang_invalid_pid).
+
+%% A false result cannot retract a message already sent to the mailbox.
+cancel_timer({linglang_timer, Owner, Ref}) when Owner =:= self(), is_reference(Ref) ->
+    erlang:cancel_timer(Ref) =/= false;
+cancel_timer({linglang_timer, Owner, _}) when Owner =/= self() -> erlang:error(linglang_cross_process_timer);
+cancel_timer(_) -> erlang:error(linglang_invalid_timer).
 
 receive_message(Schema, Milliseconds, Zero) ->
     Timeout = timeout(Milliseconds),
@@ -458,7 +477,7 @@ run_program(Source, Args, Stress, Stats) ->
                     Port = open_port({spawn_executable, Escript}, [binary, exit_status, nouse_stdio,
                         {args, [unicode:characters_to_list(Path) | [unicode:characters_to_list(A) || A <- list_items(Args)]]}]),
                     Status = try program_status(Port)
-                             after catch erlang:port_close(Port) end,
+                             after try erlang:port_close(Port) catch _:_ -> ok end end,
                     case Status of
                         0 -> io_result(true, <<>>);
                         _ -> io_result(false, iolist_to_binary(io_lib:format("program exited with status ~p", [Status])))
@@ -735,6 +754,25 @@ loop(Condition, Body, Post, Token) ->
     try loop_next(Condition, Body, Post, Token)
     catch throw:{linglang_break, Token} -> ok
     end.
+
+%% Bootstrap ranges thread the private cursor/index as native values. Own a
+%% separate root frame, replacing only this range's snapshot before collection;
+%% each generated body has its own scope for fresh iteration cells and exits.
+list_range(Items, Body, Token, References) ->
+    scope(fun() ->
+        try list_range_next(list_items(Items), 0, Body, Token, References)
+        catch throw:{linglang_break, Token} -> ok
+        end
+    end).
+
+list_range_next([], _, _, _, _) -> ok;
+list_range_next([Value | Rest] = Items, Index, Body, Token, References) ->
+    case References of true -> roots([Items]); false -> roots([]) end,
+    safepoint(),
+    try Body(Index, Value)
+    catch throw:{linglang_continue, Token} -> ok
+    end,
+    list_range_next(Rest, int64(Index + 1), Body, Token, References).
 
 loop_next(Condition, Body, Post, Token) ->
     safepoint(),

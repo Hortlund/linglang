@@ -8,6 +8,25 @@ import (
 
 func TestProcessSemantics(t *testing.T) {
 	tests := []struct{ name, source, want string }{
+		{"native_timers", `
+type Tick struct { n int; xs List[int] }
+func later(parent Pid) { sendAfter(parent, "alive", 10) }
+func main() {
+    value := Tick{n:7, xs:List[int]{1,2}}
+    timer := sendAfter(self(), value, 0)
+    value.n = 99
+    value.xs = append(value.xs, 3)
+    message := receive[Tick](5000)
+    println(message.ok, message.value.n, len(message.value.xs), cancelTimer(timer))
+    timer = sendAfter(self(), 9, 60000)
+    send(self(), 42)
+    println(cancelTimer(timer), cancelTimer(timer), receive[int](0).value, receive[int](0).ok)
+    timer = sendAfter[List[int]](self(), nil, 0)
+    list := receive[List[int]](5000)
+    println(list.ok, list.value == nil, cancelTimer(timer))
+    worker := spawnMonitor(later, self())
+    println(wait(worker.monitor, 5000).normal, receive[string](5000).value)
+}`, "true 7 2 false\ntrue false 42 false\ntrue true false\ntrue alive\n"},
 		{"value_snapshots_and_selective_receive", `
 type First struct { n int }
 type Second struct { n int }
@@ -158,6 +177,11 @@ func TestProcessRuntimeErrors(t *testing.T) {
 
 func TestProcessCompileRejections(t *testing.T) {
 	tests := []struct{ name, source, want string }{
+		{"timer_pointer", `func main(){x:=1;sendAfter(self(),&x,0)}`, "process-local pointers"},
+		{"timer_handle", `func main(){t:=sendAfter(self(),1,0);send(self(),t)}`, "timer handles belong"},
+		{"timer_receive", `func main(){receive[Timer](0)}`, "timer handles belong"},
+		{"timer_literal", `func main(){println(Timer{})}`, "invalid composite literal"},
+		{"timer_delay_type", `func main(){sendAfter(self(),1,true)}`, "cannot use"},
 		{"send_pointer", `func main() { x := 1; send(self(), &x) }`, "process-local pointers"},
 		{"send_nil_pointer", `func main() { var p *int; send(self(), p) }`, "process-local pointers"},
 		{"send_nested_pointer", `type Inner struct { p *int }; type Outer struct { inner Inner }; func main() { send(self(), Outer{}) }`, "field inner: field p: process-local pointers"},
@@ -203,8 +227,19 @@ func TestProcessRuntimeBoundary(t *testing.T) {
     self() ! {linglang_message, Schema, #{field_6e => {linglang_ptr, self(), make_ref(), []}}},
     Expect(fun() -> linglang_rt:receive_message(Schema, 0, #{field_6e => 0}) end, linglang_invalid_message),
     Expect(fun() -> linglang_rt:spawn_process(fun(_) -> ok end, nil, int, false) end, linglang_invalid_message),
+    Expect(fun() -> linglang_rt:send_after(self(), int, <<"bad">>, 0) end, linglang_invalid_message),
+    Expect(fun() -> linglang_rt:send_after(nil, int, 1, 0) end, linglang_invalid_pid),
+    Expect(fun() -> linglang_rt:send_after(self(), int, 1, -1) end, linglang_invalid_timeout),
+    Expect(fun() -> linglang_rt:send_after(self(), int, 1, 2147483648) end, linglang_invalid_timeout),
+    Expect(fun() -> linglang_rt:cancel_timer(nil) end, linglang_invalid_timer),
+    Expect(fun() -> linglang_rt:cancel_timer({linglang_timer, self(), bad}) end, linglang_invalid_timer),
+    Timer = linglang_rt:send_after(self(), int, 1, 60000),
+    {linglang_timer, _, TimerRef} = Timer,
     Parent = self(),
     Child = spawn(fun() -> receive stop -> ok end end),
+    Expect(fun() -> linglang_rt:cancel_timer({linglang_timer, Child, TimerRef}) end, linglang_cross_process_timer),
+    true = linglang_rt:cancel_timer(Timer),
+    false = linglang_rt:cancel_timer(Timer),
     Foreign = {linglang_monitor, Child, make_ref(), Parent},
     Expect(fun() -> linglang_rt:wait_process(Foreign, 0) end, linglang_cross_process_monitor),
     Expect(fun() -> linglang_rt:demonitor_process(Foreign) end, linglang_cross_process_monitor),

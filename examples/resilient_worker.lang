@@ -1,0 +1,64 @@
+package main
+
+type Job struct {
+	id    int
+	text  string
+	fail  bool
+	reply Pid
+}
+
+type Result struct {
+	id   int
+	text string
+}
+
+func worker(parent Pid) {
+	// Every replacement announces readiness after its own initialization.
+	send(parent, self())
+	for {
+		job := receive[Job](-1).value
+		if job.fail {
+			panic("simulated worker failure")
+		}
+		send(job.reply, Result{id: job.id, text: trim(job.text)})
+	}
+}
+
+func ready() Pid {
+	message := receive[Pid](5000)
+	if !message.ok {
+		panic("worker did not become ready")
+	}
+	return message.value
+}
+
+func main() {
+	supervisor := startSupervisor(3, 5)
+	child := supervise(supervisor, "worker", worker, self(), ChildOptions{})
+	if !child.ok {
+		panic(child.reason)
+	}
+	pid := ready()
+	watcher := monitor(pid)
+
+	// The coordinator retains the job; OTP restarts processes, not lost work.
+	job := Job{id: 1, text: "  hello from BEAM  ", fail: true, reply: self()}
+	send(pid, job)
+	exit := wait(watcher, 5000)
+	if !exit.ok || exit.normal {
+		panic("expected the demonstration failure")
+	}
+	println("Worker failed:", exit.reason)
+
+	replacement := ready()
+	println("OTP restarted worker:", replacement != pid)
+	job.fail = false
+	// Schedule a retry with a short backoff using a native BEAM timer.
+	sendAfter(replacement, job, 10)
+	result := receive[Result](5000)
+	if !result.ok || result.value.id != job.id {
+		panic("job did not complete")
+	}
+	println("Completed job:", result.value.id, result.value.text)
+	assert(stopSupervisor(supervisor))
+}

@@ -12,8 +12,8 @@ func emitLocalKey(e *Emitter, node SyntaxNode) string {
 	return get(e.localKeys, sourceIdentity(node.at)).value
 }
 
-// Only this top-level sequence can change native local versions. Branches,
-// nested scopes and loops retain cell locals until their edges are lowered.
+// Only this top-level sequence can change native local versions. Complex
+// bodies use native values only for bindings with no writes after declaration.
 func emitStraightBody(body SyntaxNode) bool {
 	for _, node := range body.children {
 		switch node.kind {
@@ -52,18 +52,13 @@ func emitAnalyzeLocals(e *Emitter, function SyntaxNode) {
 			}
 		}
 	}
-	// Complex bodies can only unbox primitive parameters in this slice. With
-	// no candidates, scanning their locals, writes and addresses changes nothing.
-	if !e.straight && !head(candidates).ok {
-		return
-	}
 	var addressed Map[string, bool]
 	var changed Map[string, bool]
 	pending := List[SyntaxNode]{childAt(function, 3)}
 	for head(pending).ok {
 		node := head(pending).value
 		pending = tail(pending)
-		if e.straight && node.kind == "Ident" {
+		if node.kind == "Ident" {
 			key := sourceIdentity(node.at)
 			definition := get(e.checked.definitions, key)
 			if definition.ok && definition.value.kind == "var" && emitPrimitive(definition.value.typeID) {
@@ -86,7 +81,9 @@ func emitAnalyzeLocals(e *Emitter, function SyntaxNode) {
 				}
 			}
 		}
-		if node.kind == "AssignStmt" {
+		// A short declaration initializes a fresh identity. Counting it as a
+		// later write would exclude every read-only short-declared local.
+		if node.kind == "AssignStmt" && node.text != ":=" {
 			for _, target := range childAt(node, 0).children {
 				changed = put(changed, emitLocalKey(e, target), true)
 			}

@@ -44,6 +44,7 @@ type TypeScope struct {
 type CheckedValue struct {
 	name        string
 	typeID      int
+	messageType int
 	addressable bool
 	kind        string
 	constant    ConstantValue

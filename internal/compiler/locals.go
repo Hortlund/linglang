@@ -17,17 +17,19 @@ type local struct {
 }
 
 type flowBlock struct {
-	id      int
-	stmt    ast.Stmt
-	clone   types.Object // fresh identity for an addressed for-loop variable
-	cond    ast.Expr
-	result  ast.Expr
-	next    *flowBlock
-	other   *flowBlock
-	returns bool
-	uses    map[types.Object]bool
-	defs    map[types.Object]bool
-	live    map[types.Object]bool
+	id        int
+	stmt      ast.Stmt
+	clone     types.Object // fresh identity for an addressed for-loop variable
+	rangeRest types.Object // consume a native list cell on the true edge
+	rangeHead types.Object // current element, when the range binds a value
+	cond      ast.Expr
+	result    ast.Expr
+	next      *flowBlock
+	other     *flowBlock
+	returns   bool
+	uses      map[types.Object]bool
+	defs      map[types.Object]bool
+	live      map[types.Object]bool
 }
 
 type localLowering struct {
@@ -73,7 +75,7 @@ func (c *compiler) optimizedFunction(fn *ast.FuncDecl) (string, error) {
 		}
 		if call, ok := n.(*ast.CallExpr); ok {
 			if id := callIdentifier(call.Fun); id != nil {
-				if _, userFunction := c.info.Uses[id].(*types.Func); userFunction {
+				if _, userFunction := c.info.Uses[id].(*types.Func); userFunction && !c.nonCollectingLeaves[c.info.Uses[id]] && !c.nonCollectingCall(call) {
 					g.safePoints = true
 				}
 			}
@@ -83,6 +85,8 @@ func (c *compiler) optimizedFunction(fn *ast.FuncDecl) (string, error) {
 	for _, v := range g.locals {
 		g.rooted = g.rooted || v.boxed || containsReferences(v.object.Type())
 	}
+	// Pointer-free callers need no managed collection checks for proven leaves.
+	// Rooted callers retain checks, including on loops, even for leaf calls.
 	g.safePoints = g.safePoints || g.rooted
 	// Leaf helpers may borrow their caller's roots. Without managed allocation,
 	// loops, blocking intrinsics, or calls that could collect, no managed cell
@@ -126,6 +130,9 @@ func (c *compiler) optimizedFunction(fn *ast.FuncDecl) (string, error) {
 }
 
 func (c *compiler) nonCollectingLeaf(fn *ast.FuncDecl) bool {
+	if fn.Body == nil {
+		return false // unsupported declarations are diagnosed during lowering
+	}
 	safe := true
 	ast.Inspect(fn.Body, func(node ast.Node) bool {
 		if !safe {
@@ -153,13 +160,17 @@ func (c *compiler) nonCollectingCall(call *ast.CallExpr) bool {
 	}
 	obj := c.info.Uses[id]
 	if _, builtin := obj.(*types.Builtin); builtin {
-		return id.Name == "len"
+		return id.Name == "len" || id.Name == "append"
 	}
 	// Resolve the actual intrinsic binding: a user function with one of these
 	// names may allocate or collect. Keep this list limited to runtime helpers
 	// that never call new, collect, safepoint, or another linglang function.
 	switch c.intrinsics[obj] {
 	case "byteAt", "slice", "runeAt", "formatInt", "trim", "parseInt", "isLetter", "isDigit", "assert":
+		return true
+	case "prepend", "head", "tail", "get", "put", "remove", "split", "join":
+		// These construct only native BEAM terms. Pointer-bearing arguments and
+		// results still trigger the caller's normal managed-root protocol.
 		return true
 	}
 	return false
@@ -253,6 +264,9 @@ func (g *localLowering) statement(stmt ast.Stmt, next, stop, again *flowBlock) *
 		}
 		return b
 	case *ast.ForStmt:
+		if info := g.c.rangeLoops[s]; info != nil {
+			return g.listRangeFlow(s, info, next)
+		}
 		test := g.block()
 		test.cond = s.Cond
 		test.other = next
@@ -326,6 +340,12 @@ func (g *localLowering) target(b *flowBlock, expr ast.Expr, read bool) {
 
 func (g *localLowering) analyzeLiveness() {
 	for _, b := range g.blocks {
+		if b.rangeRest != nil {
+			b.uses[b.rangeRest], b.defs[b.rangeRest] = true, true
+			if b.rangeHead != nil {
+				b.defs[b.rangeHead] = true
+			}
+		}
 		if b.clone != nil {
 			b.uses[b.clone], b.defs[b.clone] = true, true
 		}
@@ -445,6 +465,17 @@ func (g *localLowering) emitBlock(b *flowBlock) (string, error) {
 		parts = append(parts, code)
 	}
 	switch {
+	case b.rangeRest != nil:
+		rest := state[b.rangeRest]
+		empty := g.edge(b.other, state)
+		head := "_"
+		if b.rangeHead != nil {
+			head = c.fresh()
+			state[b.rangeHead] = head
+		}
+		tail := c.fresh()
+		state[b.rangeRest] = tail
+		parts = append(parts, "case "+rest+" of ["+head+" | "+tail+"] -> "+g.edge(b.next, state)+"; [] -> "+empty+"; nil -> "+empty+" end")
 	case b.returns:
 		value := "ok"
 		if b.result != nil {

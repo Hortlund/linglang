@@ -1,0 +1,66 @@
+package main
+
+// Keep the instantiated message type even for explicitly typed nil sends.
+// An emitter must never infer the envelope from the runtime value alone.
+func nativeMessageType(c *Checker, node SyntaxNode, name string, explicit List[int], values List[CheckedValue]) int {
+	id := tInvalid
+	switch name {
+	case "receive":
+		id = head(explicit).value
+	case "send", "sendAfter":
+		id = defaultType(valueAt(values, 1).typeID)
+		if head(explicit).ok {
+			id = head(explicit).value
+		}
+	case "spawn", "spawnMonitor", "supervise":
+		index := 0
+		if name == "supervise" {
+			index = 2
+		}
+		id = head(checkedType(c, valueAt(values, index).typeID).params).value
+	default:
+		return tInvalid
+	}
+	checkMessageType(c, node.at, id, nil, 0)
+	return id
+}
+
+// The active path, rather than a global visited set, distinguishes recursive
+// schemas from repeated occurrences of a perfectly valid field type.
+func checkMessageType(c *Checker, at Token, id int, active Map[int, bool], depth int) {
+	if c.reason != "" {
+		return
+	}
+	if get(active, id).ok {
+		checkFail(c, at, "recursive message types are not supported")
+		return
+	}
+	if depth > 128 {
+		checkFail(c, at, "message type nesting exceeds 128 levels")
+		return
+	}
+	if id == tInt || id == tBool || id == tString {
+		return
+	}
+	active = put(active, id, true)
+	t := checkedType(c, id)
+	switch t.kind {
+	case "handle":
+		if t.name != "Pid" {
+			checkFail(c, at, t.name+" handles belong to their creating process")
+		}
+	case "pointer":
+		checkFail(c, at, "process-local pointers cannot cross a process boundary")
+	case "list", "delivery":
+		checkMessageType(c, at, t.elem, active, depth+1)
+	case "map":
+		checkMessageType(c, at, t.key, active, depth+1)
+		checkMessageType(c, at, t.elem, active, depth+1)
+	case "struct":
+		for _, field := range t.fields {
+			checkMessageType(c, at, field.typeID, active, depth+1)
+		}
+	default:
+		checkFail(c, at, "unsupported message type")
+	}
+}

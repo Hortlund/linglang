@@ -18,6 +18,19 @@ import (
 func TestBootstrapEmitterPrograms(t *testing.T) {
 	type fixture struct{ name, code, want, failure string }
 	fixtures := []fixture{
+		{"otp_timers", otpTimerFixture, otpTimerOutput, ""},
+		{"otp_timer_bad_delay", `func main(){sendAfter(self(),1,-1)}`, "", "linglang_invalid_timeout"},
+		{"otp_timer_nil", `func main(){var t Timer;cancelTimer(t)}`, "", "linglang_invalid_timer"},
+		{"otp_messages", otpMessagesFixture, "true 7 true 8\nfalse 0 true true\ntrue true true\n", ""},
+		{"otp_supervisor", otpSupervisorFixture, "true true true\ntrue true true\ntrue true true\n", ""},
+		{"otp_restart", otpRestartFixture, "true true true\ntrue true\n", ""},
+		{"otp_crash", `func worker(n int){panic("worker down")};func main(){p:=spawnMonitor(worker,0);exit:=wait(p.monitor,5000);println(exit.ok,exit.normal,exit.reason);println("parent alive")}`, "true false worker down\nparent alive\n", ""},
+		{"otp_gc_roots", emitterPointerHelpers + `func worker(p Pid){n:=node(7);_=churn();send(p,n.x)};func use(p *N,d Delivery[int]){println(p.x,d.value)};func main(){p:=spawnMonitor(worker,self());use(node(9),receive[int](5000));println(wait(p.monitor,5000).normal)}`, "9 7\ntrue\n", ""},
+		{"otp_schema_contract", otpSchemaFixture, "", ""},
+		{"otp_shadowing", `func use(send int,receive int,spawn int)int{return send+receive+spawn};func main(){self:=4;monitor:=5;println(use(1,2,3),self,monitor);{Pid:=7;println(Pid)}}`, "6 4 5\n7\n", ""},
+		{"otp_timeout_error", `func main(){receive[int](-2)}`, "", "linglang_invalid_timeout"},
+		{"otp_invalid_pid", `func main(){var p Pid;send(p,1)}`, "", "linglang_invalid_pid"},
+		{"otp_handle_zero", `func main(){var p Pid;var m Monitor;var s Supervisor;var x Process;println(p==nil,m==nil,s==nil,x.pid==nil,x.monitor==nil);d:=head[Pid](nil);println(d.value==nil,d.ok)}`, "true true true true true\ntrue false\n", ""},
 		{"local_versions", `func f(n int,s string,b bool)int{n++;x:=n;n+=x;x*=2;s+="!";b=!b;println(n,x,s,b);return x};func main(){println(f(3,"ok",true))}`, "8 8 ok! false\n8\n", ""},
 		{"local_overflow_and_shift", `func f(n int)int{n++;n--;n<<=2;n>>=1;return n};func main(){n:=9223372036854775807;n++;println(n,f(3));n=-1;n>>=64;println(n);n<<=64;println(n);x:=1;k:=0;x<<=(((1<<63)<<k)>>62);println(x)}`, "-9223372036854775808 6\n-1\n0\n4\n", ""},
 		{"local_address_escape", `func f(n int)*int{p:=&n;n++;return p};func main(){p:=f(3);(*p)++;println(*p)}`, "5\n", ""},
@@ -27,6 +40,13 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 		{"local_shadowed_parameters", `func f(n int)int{{n:=8;p:=&n;(*p)++;println(n)};return n};func main(){println(f(3))}`, "9\n3\n", ""},
 		{"local_root_handoff", emitterPointerHelpers + `func f(n int)int{x:=n+2;p:=node(x);_=churn();println(x,p.x);x++;_=churn();return x+p.x};func main(){println(f(3))}`, "5 5\n11\n", ""},
 		{"local_effects_and_failure", `func effect(n int)int{print(n);return n};func f(n int){x:=effect(n);x=effect(x+1);_=effect(x+1);panic("local down")};func main(){f(1)}`, "123", "local down"},
+		{"local_readonly_scopes", readonlyScopesFixture, "1 0 ok true\n2\n3\n1\n4\n1\n8\n0 10\n2 32\n1\n", ""},
+		{"local_readonly_iteration_escape", readonlyEscapeFixture, "10 11\n20 30\ntrue true\n", ""},
+		{"local_readonly_outer_mutation", `func main(){x:=1;var y int;for i:=0;i<2;i++{z:=x;x+=2;y=z;println(z,x)};println(y);for y,x=range (List[int]{7,9}){println(y,x)};println(x,y)}`, "1 3\n3 5\n3\n0 7\n1 9\n9 1\n", ""},
+		{"local_readonly_branch_address", `func main(){x:=1;var p *int;if false{p=&x};{x:=4;println(x)};p=&(x);(*p)+=2;println(x)}`, "4\n3\n", ""},
+		{"local_readonly_roots", emitterPointerHelpers + `func f(n int)int{x:=n+2;s:="alive";p:=node(x);if x>0{y:=x+3;_=churn();println(x,y,s,p.x)};_=churn();return x+p.x};func main(){println(f(3))}`, "5 8 alive 5\n10\n", ""},
+		{"local_readonly_initialization", `func effect(n int)int{print(n);return n};func main(){x:=effect(1);if x==1{var y int=effect(2);println(y)}else{_=effect(9)};for i:=0;i<2;i++{z:=effect(i+3);println(z)};println(x)}`, "122\n33\n44\n1\n", ""},
+		{"local_readonly_return_failure", `func f(n int)int{if n>0{x:=n+1;return x};y:=n+2;return y};func main(){x:=f(1);println(x,f(0));if x==2{s:="readonly down";panic(s)}}`, "2 2\n", "readonly down"},
 		{"operator_chain", `func main(){a:=1;println(a+2+3+4,a+a+a)}`, "10 3\n", ""},
 		{"constants_and_shadowing", `const Big=1<<200;const Answer=(Big+7)-Big;func main(){const Answer=8;println(Answer);{const Answer=9;println(Answer)};println(Answer)}`, "8\n9\n8\n", ""},
 		{"early_returns", `func f(n int)int{if n<0{return -1}else if n>0{return 1}else{return 0}};func main(){println(f(-7),f(0),f(7))}`, "-1 0 1\n", ""},
@@ -80,6 +100,8 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 		{"range_iteration_pointer_identity", emitterPointerHelpers + `func main(){var indices List[*int];var values List[*int];for i,v:=range (List[int]{4,5,6}){indices=append(indices,&i);values=append(values,&v)};_=churn();println(*head(indices).value,*head(tail(indices)).value,*head(tail(tail(indices))).value);println(*head(values).value,*head(tail(values)).value,*head(tail(tail(values))).value,head(values).value==head(tail(values)).value);v:=0;values=nil;for _,v=range (List[int]{7,8}){values=append(values,&v)};println(*head(values).value,*head(tail(values)).value,head(values).value==head(tail(values)).value)}`, "0 1 2\n4 5 6 false\n8 8 true\n", ""},
 		{"range_pointer_snapshot_and_return", emitterPointerHelpers + `func find(xs List[*N])*N{for _,p:=range xs{if p.x==2{return p}};return nil};func main(){xs:=List[*N]{node(1),node(2),node(3)};p:=find(xs);for _,n:=range xs{xs=nil;_=churn();println(n.x)};_=churn();println(p.x)}`, "1\n2\n3\n2\n", ""},
 		{"range_failure_cleanup", emitterPointerHelpers + `func main(){for _,p:=range (List[*N]{node(1)}){_=churn();panic(formatInt(p.x))}}`, "", "linglang_panic"},
+		{"range_private_cursor", nativeRangeFixture, "4\n7\n100\n100\n0 10\n1 20\n2 30\n", ""},
+		{"range_head_tail_roots", emitterPointerHelpers + `func main(){var keys List[*int];var saved *N;for i,p:=range (List[*N]{node(10),node(20),node(30)}){keys=prepend(&i,keys);_=churn();println(i,p.x);if i==0{saved=p;continue};if i==1{break}};_=churn();println(saved.x,*head(keys).value,*head(tail(keys)).value)}`, "0 10\n1 20\n10 1 0\n", ""},
 		{"shadowed_new", `func new(n int)*int{x:=n;return &x};func main(){p:=new(8);println(*p)}`, "8\n", ""},
 		{"switch_order_and_default", `func mark(n int)int{print(n);return n};func main(){switch mark(2){default:println("fallback");case mark(1),mark(2),mark(3):println(" match");case mark(4):panic("late")};switch mark(9){case mark(1):panic("wrong");default:println(" fallback");case mark(2):panic("wrong")};switch{};switch{default:println("empty")}}`, "212 match\n912 fallback\nempty\n", ""},
 		{"switch_bool_and_initializers", `func mark(n int)bool{print(n);return n==2};func main(){n:=9;switch n:=2;n{case 1:panic("wrong");case 2:x:=3;println(n,x);default:x:=4;println(x)};println(n);switch{case mark(1),mark(2),mark(3):println(" yes");default:panic("wrong")};b:=true;switch b{case false:panic("wrong");case true:println("bool");case true:panic("late")}}`, "2 3\n9\n12 yes\nbool\n", ""},
@@ -96,6 +118,11 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 		{"native_helper_shadowing", `func use(args int,readFile int,runeAt int)int{return args+readFile+runeAt};func main(){args:=1;readFile:=2;runeAt:=3;println(use(args,readFile,runeAt))}`, "6\n", ""},
 		{"native_bootstrap_results", `func main(){var z FilesResult;f:=sourceFiles(List[string]{""});w:=writeFile("","text");b:=buildProgram("invalid","",nil,false,false);println(len(z.value),z.ok,z.reason=="",f.ok,f.reason!="",w.ok,b.ok)}`, "0 false true false true false false\n", ""},
 	}
+	example, err := os.ReadFile("../../examples/resilient_worker.lang")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtures = append(fixtures, fixture{"otp_resilient_worker", strings.TrimPrefix(string(example), "package main"), "Worker failed: simulated worker failure\nOTP restarted worker: true\nCompleted job: 1 hello from BEAM\n", ""})
 	files, err := readSources("../../bootstrap/emitter")
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +131,7 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "erl", append([]string{"-noshell", "-pa", dir, "-eval", evaluationScript(stress, true)}, args...)...)
+		cmd := exec.CommandContext(ctx, "erl", append([]string{"-noshell", "-pa", dir, "-eval", "logger:set_primary_config(level, emergency), " + evaluationScript(stress, true)}, args...)...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		err := cmd.Run()
@@ -142,7 +169,7 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 					}
 					seedOut, seedErr, seedFailure := run(seedDir, true)
 					modes := []bool{false}
-					if strings.HasPrefix(f.name, "local_") {
+					if strings.HasPrefix(f.name, "local_") || strings.HasPrefix(f.name, "range_") || strings.HasPrefix(f.name, "otp_") {
 						modes = append(modes, true)
 					}
 					for _, cells := range modes {
@@ -156,6 +183,9 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 								t.Fatalf("emission: %v\n%s", err, stderr)
 							}
 							emitterCleanGC(t, stderr)
+							if f.name == "otp_schema_contract" {
+								assertMessageSchemas(t, seed, module)
+							}
 							generatedDir := t.TempDir()
 							if err := build(generatedDir, module); err != nil {
 								t.Fatalf("emitted Erlang: %v\n%s", err, module)
@@ -181,6 +211,11 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 }
 
 const emitterPointerHelpers = `type N struct{x int;next *N};func node(n int)*N{x:=N{x:n};return &x};func churn()int{for i:=0;i<30;i++{_=node(i)};return 5};`
+
+const nativeRangeFixture = `func main(){n:=99;for n,n=range (List[int]{4,7}){println(n);n=100};println(n);for n,n=range (List[int]{}){panic("empty")};println(n);for i,v:=range (List[int]{10,20,30}){println(i,v);i=100;v=200;if v==200{continue}}}`
+
+const readonlyScopesFixture = `func f(b bool){x:=1;var z int;s:="ok";yes:=true;println(x,z,s,yes);{x:=2;println(x)};if b{x:=3;println(x)}else{x:=4;println(x)};println(x)};func main(){f(true);if false{f(false)}else{x:=4;println(x)};x:=1;switch n:=2;n{case 2:y:=n+6;println(x);println(y);default:y:=9;println(y)};for i,n:=range (List[int]{10,20,30}){if i==1{continue};v:=i+n;println(i,v)};for n:=7;n==7;{v:=n+1;if v==8{break}};println(x)}`
+const readonlyEscapeFixture = `func main(){var ps List[*int];for i:=0;i<2;i++{x:=i+10;ps=append(ps,&x)};println(*head(ps).value,*head(tail(ps)).value);var qs List[*int];for _,n:=range (List[int]{2,3}){qs=append(qs,&n);n*=10};println(*head(qs).value,*head(tail(qs)).value);println(head(ps).value!=head(tail(ps)).value,head(qs).value!=head(tail(qs)).value)}`
 
 func TestBootstrapEmitterPackedWithoutGo(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -304,7 +339,7 @@ func TestBootstrapEmitterPackedWithoutGo(t *testing.T) {
 		t.Fatalf("OTP-only collection execution: %q (%v)\n%s", out, err, stderr)
 	}
 	emitterCleanGC(t, stderr)
-	for _, code := range []string{"func main(){for range (Map[int,int]{1:2}) {}}", "func main(){println(List[int]{1:2})}", "func main(){println(make(List[int],2))}", "func main(){println(head[Pid](nil))}", "func f()int{};func main(){}", "const N=1<<100;func main(){println(N)}", "func main(){n:=30;println('a'<<n)}", "func main(){n:=30;println('a'>>n)}", "func main(){n:=30;println(('a'<<n)==0)}", "func main(){n:=30;println(('a'<<n)<0)}", "func main(){n:=30;println(^('a'<<n))}", "func main(){n:=30;println(-('a'<<n))}", "func main(){n:=30;println(('a'<<n)+1)}", "func main(){n:=30;_ = 'a'<<n}", "func main(){n:=30;panic('a'<<n)}"} {
+	for _, code := range []string{"func main(){for range (Map[int,int]{1:2}) {}}", "func main(){println(List[int]{1:2})}", "func main(){println(make(List[int],2))}", "func main(){send(self(),head[Monitor](nil).value)}", "func main(){sendAfter(self(),List[*int]{},0)}", "type N struct{xs List[N]};func main(){receive[N](0)}", "func f()int{};func main(){}", "const N=1<<100;func main(){println(N)}", "func main(){n:=30;println('a'<<n)}", "func main(){n:=30;println('a'>>n)}", "func main(){n:=30;println(('a'<<n)==0)}", "func main(){n:=30;println(('a'<<n)<0)}", "func main(){n:=30;println(^('a'<<n))}", "func main(){n:=30;println(-('a'<<n))}", "func main(){n:=30;println(('a'<<n)+1)}", "func main(){n:=30;_ = 'a'<<n}", "func main(){n:=30;panic('a'<<n)}"} {
 		path := filepath.Join(dir, "bad.lang")
 		if err := os.WriteFile(path, []byte("package main\n"+code), 0600); err != nil {
 			t.Fatal(err)

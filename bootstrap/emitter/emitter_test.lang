@@ -26,12 +26,35 @@ func TestEmitterNativeLocals() {
 	for _, source := range (List[string]{
 		"func f(n int)*int{return &n};func main(){println(*f(3))}",
 		"func f(n int)int{for n<3{n++};return n};func main(){println(f(0))}",
-		"func main(){x:=1;{x:=2;println(x)};println(x)}",
+		"func main(){x:=1;if true{p:=&x;(*p)++};println(x)}",
 	}) {
 		parsed = parse("boxed.lang", "package main\n"+source)
 		optimized = emitPackage(List[SyntaxNode]{parsed.root})
 		assert(parsed.ok && optimized.ok && len(split(optimized.module, "linglang_rt:new(")) > 1)
 	}
+}
+
+func TestEmitterReadOnlyLocals() {
+	for _, source := range (List[string]{
+		"func main(){x:=1;{x:=2;println(x)};if x==1{x:=3;println(x)}else{x:=4;println(x)};println(x)}",
+		"func main(){var x int;var s string=\"yes\";b:=true;if b{println(x,s)};switch n:=2;n{case 2:y:=n+1;println(y);default:y:=0;println(y)}}",
+		"func main(){for n:=7;n==7;{x:=n+1;println(x);break}}",
+	}) {
+		parsed := parse("readonly.lang", "package main\n"+source)
+		optimized := emitPackage(List[SyntaxNode]{parsed.root})
+		cells := emitPackageWithOptions(List[SyntaxNode]{parsed.root}, true)
+		assert(parsed.ok && optimized.ok && cells.ok)
+		assert(len(split(optimized.module, "linglang_rt:new(")) == 1)
+		assert(len(split(cells.module, "linglang_rt:new(")) > 1)
+	}
+	parsed := parse("range.lang", "package main\nfunc main(){for i,n:=range (List[int]{1,2}){x:=i+n;println(x)}}")
+	optimized := emitPackage(List[SyntaxNode]{parsed.root})
+	assert(parsed.ok && optimized.ok)
+	// The cursor, index and read-only iteration bindings all stay native.
+	assert(len(split(optimized.module, "linglang_rt:new(")) == 1)
+	assert(len(split(optimized.module, "linglang_rt:list_range(")) == 2)
+	cells := emitPackageWithOptions(List[SyntaxNode]{parsed.root}, true)
+	assert(cells.ok && len(split(cells.module, "linglang_rt:list_range(")) == 1)
 }
 
 func TestCheckedMetadata() {
@@ -81,7 +104,7 @@ func TestEmitterBoundaries() {
 		"func f()int{for{break}};func main(){}",
 		"func f()int{for true{return 1}};func main(){}",
 		"func main(){panic(1)}",
-		"func main(){startSupervisor(1,100)}",
+		"func main(){send(self(),monitor(self()))}",
 		"func main(){x,y:=1,2;println(x,y)}",
 		"func f()int{switch{case true:return 1}};func main(){}",
 		"func f()int{switch{default:break;return 1}};func main(){}",

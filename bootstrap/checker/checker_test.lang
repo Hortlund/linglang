@@ -59,6 +59,7 @@ func TestStructsAndCollections() {
 }
 
 func TestOTPTypesAndShadowing() {
+	assert(checkedSource("func f(){t:=sendAfter[List[int]](self(),nil,0);println(cancelTimer(t))}").ok)
 	assert(checkedSource("func worker(n int){send(self(),n)};func f(){var Pid int;println(Pid);p:=spawn(worker,1);m:=monitor(p);println(wait(m,100).reason,receive[int](0).ok)}").ok)
 	assert(checkedSource("func println(x int){};func f(){println(1);head:=1;println(head)}").ok)
 	for _, source := range (List[string]{
@@ -69,6 +70,20 @@ func TestOTPTypesAndShadowing() {
 		"func f(){receive[int](true)}",
 		"func f(){receive(0)}",
 		"func f(){wait(self(),0)}",
+		"func f(){x:=1;send(self(),&x)}",
+		"func f(){receive[List[*int]](0)}",
+		"func f(){send(self(),monitor(self()))}",
+		"func f(){receive[Supervisor](0)}",
+		"func f(){receive[Timer](0)}",
+		"func f(){sendAfter(self(),1,true)}",
+		"func f(){sendAfter(self(),1)}",
+		"func f(){sendAfter[int,string](self(),1,0)}",
+		"func f(){cancelTimer(self())}",
+		"func f(){x:=1;sendAfter(self(),&x,0)}",
+		"func f(){t:=sendAfter(self(),1,0);send(self(),t)}",
+		"type N struct{xs List[N]};func f(){receive[N](0)}",
+		"type N struct{p *int};func worker(n N){};func f(){spawnMonitor(worker,N{})}",
+		"func worker(n Monitor){};func f(){supervise(startSupervisor(1,5),\"bad\",worker,monitor(self()),ChildOptions{})}",
 		"func f(){supervise(startSupervisor(1,1000),1,self,1,ChildOptions{})}",
 		"func f(){head:=1;head(List[int]{})}",
 	}) {

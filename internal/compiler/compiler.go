@@ -40,6 +40,9 @@ type compiler struct {
 	intrinsics   map[types.Object]string
 	processTypes map[string]*types.Named
 	rangeOps     map[ast.Expr]string
+	rangeLoops   map[*ast.ForStmt]*listRange
+
+	nonCollectingLeaves map[types.Object]bool
 }
 
 // Options retains the original cell-based lowering for comparisons and debugging.
@@ -192,6 +195,16 @@ func compileFiles(sources []SourceFile, options Options, tests *[]TestCase) (str
 	}
 	if err := c.lowerRanges(file); err != nil {
 		return "", err
+	}
+	// Index proven leaves before lowering callers, independently of source/file
+	// order. This is deliberately not a transitive or recursive effect analysis.
+	if !options.DisableOptimizations {
+		c.nonCollectingLeaves = map[types.Object]bool{}
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && c.nonCollectingLeaf(fn) {
+				c.nonCollectingLeaves[c.info.Defs[fn.Name]] = true
+			}
+		}
 	}
 	var functions []string
 	for _, decl := range file.Decls {

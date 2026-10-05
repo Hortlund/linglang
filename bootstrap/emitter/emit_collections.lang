@@ -76,8 +76,9 @@ func emitCollectionCall(e *Emitter, node SyntaxNode, name string, codes List[str
 }
 
 // The remainder cell owns an immutable snapshot of the source list. Declared
-// iteration variables get fresh cells inside each body scope; assignment form
-// writes the enclosing variables. Continue advances, while break skips post.
+// iteration variables get fresh bindings inside each body scope, with cells
+// only for mutable/addressed values. Assignment form writes enclosing cells.
+// Continue advances, while break skips post.
 func emitRange(e *Emitter, node SyntaxNode) string {
 	sequence := childAt(node, 2)
 	id := emitValue(e, sequence).typeID
@@ -86,6 +87,9 @@ func emitRange(e *Emitter, node SyntaxNode) string {
 		return ""
 	}
 	emitRequireType(e, id, sequence.at)
+	if !e.noOpt {
+		return emitNativeRange(e, node, id)
+	}
 	rest := emitFresh(e)
 	setup := rest + " = " + emitNew(e, id, emitScope(emitExpression(e, sequence, false)))
 	index := ""
@@ -107,7 +111,7 @@ func emitRange(e *Emitter, node SyntaxNode) string {
 			}
 			if node.text == ":=" {
 				emitRequireType(e, emitDefinition(e, name).typeID, name.at)
-				bindings = append(bindings, emitCell(e, name, true)+" = "+emitNew(e, emitDefinition(e, name).typeID, value))
+				bindings = append(bindings, emitDeclareLocal(e, name, value))
 			} else {
 				bindings = append(bindings, "linglang_rt:write("+emitCell(e, name, false)+", "+value+")")
 			}
@@ -126,4 +130,44 @@ func emitRange(e *Emitter, node SyntaxNode) string {
 		post = "linglang_rt:write(" + index + ", linglang_rt:binary(add, linglang_rt:read(" + index + "), 1)), " + post
 	}
 	return emitScope(setup + ", " + loop + " = make_ref(), linglang_rt:loop(fun() -> linglang_rt:list_more(linglang_rt:read(" + rest + ")) end, fun() -> " + body + " end, fun() -> " + post + " end, " + loop + ")")
+}
+
+func emitNativeRange(e *Emitter, node SyntaxNode, id int) string {
+	values := e.values
+	source := emitScope(emitExpression(e, childAt(node, 2), false))
+	index := emitFresh(e)
+	item := emitFresh(e)
+	var bindings List[string]
+	position := 0
+	for _, name := range (List[SyntaxNode]{childAt(node, 0), childAt(node, 1)}) {
+		if name.kind != "nil" && name.text != "_" {
+			if name.kind != "Ident" {
+				emitFail(e, name.at, "range targets must be identifiers")
+				return ""
+			}
+			value := item
+			if position == 0 {
+				value = index
+			}
+			if node.text == ":=" {
+				emitRequireType(e, emitDefinition(e, name).typeID, name.at)
+				bindings = append(bindings, emitDeclareLocal(e, name, value))
+			} else {
+				bindings = append(bindings, "linglang_rt:write("+emitCell(e, name, false)+", "+value+")")
+			}
+		}
+		position++
+	}
+	loop := emitFresh(e)
+	e.loops = prepend(loop, e.loops)
+	e.breaks = prepend(loop, e.breaks)
+	bindings = append(bindings, emitStatement(e, childAt(node, 3)))
+	e.breaks = tail(e.breaks)
+	e.loops = tail(e.loops)
+	e.values = values
+	references := "false"
+	if emitReferences(e, id) {
+		references = "true"
+	}
+	return emitScope(loop + " = make_ref(), linglang_rt:list_range(" + source + ", fun(" + index + ", " + item + ") -> " + emitScope(join(bindings, ", ")) + " end, " + loop + ", " + references + ")")
 }

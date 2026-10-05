@@ -108,6 +108,7 @@ func (c *compiler) listBuiltin(call *ast.CallExpr) (string, bool, error) {
 // escape. Continue uses the normal loop post step, and break skips it.
 func (c *compiler) lowerRanges(file *ast.File) error {
 	c.rangeOps = map[ast.Expr]string{}
+	c.rangeLoops = map[*ast.ForStmt]*listRange{}
 	for _, decl := range file.Decls {
 		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Body != nil {
 			if err := c.lowerRangeBody(fn.Body.List); err != nil {
@@ -167,8 +168,16 @@ func (c *compiler) lowerRangeBody(body []ast.Stmt) error {
 	return nil
 }
 
+// Keep the validated cell-backend normalization as an oracle, while retaining
+// enough identity to lower its private cursor directly in the optimized CFG.
+type listRange struct {
+	rest  types.Object
+	value *ast.AssignStmt
+}
+
 func (c *compiler) rangeLoop(s *ast.RangeStmt, element types.Type) ast.Stmt {
 	definition, rest := c.rangeLocal(s.For, c.info.TypeOf(s.X))
+	rangeInfo := &listRange{rest: c.info.Uses[rest]}
 	setup := []ast.Stmt{&ast.AssignStmt{Lhs: []ast.Expr{definition}, Tok: token.DEFINE, Rhs: []ast.Expr{s.X}}}
 	var iteration, post []ast.Stmt
 	if key, ok := s.Key.(*ast.Ident); ok && key.Name != "_" {
@@ -180,10 +189,12 @@ func (c *compiler) rangeLoop(s *ast.RangeStmt, element types.Type) ast.Stmt {
 		post = append(post, &ast.IncDecStmt{X: index, Tok: token.INC})
 	}
 	if value, ok := s.Value.(*ast.Ident); ok && value.Name != "_" {
-		iteration = append(iteration, &ast.AssignStmt{Lhs: []ast.Expr{value}, Tok: s.Tok, Rhs: []ast.Expr{c.rangeOperation(s.For, "first", rest, element)}})
+		rangeInfo.value = &ast.AssignStmt{Lhs: []ast.Expr{value}, Tok: s.Tok, Rhs: []ast.Expr{c.rangeOperation(s.For, "first", rest, element)}}
+		iteration = append(iteration, rangeInfo.value)
 	}
 	post = append(post, &ast.AssignStmt{Lhs: []ast.Expr{rest}, Tok: token.ASSIGN, Rhs: []ast.Expr{c.rangeOperation(s.For, "tail", rest, c.info.TypeOf(s.X))}})
 	loop := &ast.ForStmt{For: s.For, Cond: c.rangeOperation(s.For, "more", rest, types.Typ[types.Bool]), Post: &ast.BlockStmt{List: post}, Body: &ast.BlockStmt{List: append(iteration, s.Body.List...)}}
+	c.rangeLoops[loop] = rangeInfo
 	return &ast.BlockStmt{Lbrace: s.For, List: append(setup, loop)}
 }
 
@@ -201,4 +212,45 @@ func (c *compiler) rangeOperation(pos token.Pos, op string, items ast.Expr, t ty
 	c.info.Types[call] = types.TypeAndValue{Type: t}
 	c.rangeOps[call] = op
 	return call
+}
+
+func (g *localLowering) listRangeFlow(loop *ast.ForStmt, info *listRange, next *flowBlock) *flowBlock {
+	test := g.block()
+	test.rangeRest, test.other = info.rest, next
+	body := append([]ast.Stmt(nil), loop.Body.List...)
+	if info.value != nil {
+		obj := g.c.info.Defs[info.value.Lhs[0].(*ast.Ident)]
+		if info.value.Tok == token.DEFINE && !g.lookup[obj].boxed {
+			// A fresh native binding can be the pattern variable itself. Keep
+			// assignment-form ranges ordered: their two targets may alias.
+			test.rangeHead = obj
+			for i, statement := range body {
+				if statement == info.value {
+					body = append(body[:i], body[i+1:]...)
+					break
+				}
+			}
+		} else {
+			definition, head := g.c.rangeLocal(loop.For, g.c.info.TypeOf(info.value.Rhs[0]))
+			obj := g.c.info.Defs[definition]
+			v := &local{object: obj}
+			g.locals = append(g.locals, v)
+			g.lookup[obj] = v
+			test.rangeHead = obj
+			binding := *info.value
+			binding.Rhs = []ast.Expr{head}
+			for i, statement := range body {
+				if statement == info.value {
+					body[i] = &binding
+				}
+			}
+		}
+	}
+	// The private cursor advances in the pattern match, before the body. The
+	// head is an independent live value, so a collecting body cannot lose it.
+	// Only the optional index increment remains in the continue/post path.
+	postStatements := loop.Post.(*ast.BlockStmt).List
+	post := g.sequence(postStatements[:len(postStatements)-1], test, nil, nil)
+	test.next = g.sequence(body, post, next, post)
+	return test
 }

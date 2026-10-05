@@ -102,7 +102,97 @@ use `go_allocations` and `go_allocated_bytes` instead. Runtime versions and
 unavailable; running the command with `-compare` requires it and fails clearly
 if it is missing.
 
-### Current four-language local results — 2026-10-04
+### Native list traversal — 2026-10-05
+
+The next change emits native list patterns in the Go seed's optimized range
+header. Fresh unboxed values bind directly to the matched head; the private
+cursor advances on that edge, with no more/first/tail helper calls. Assignment
+targets and addressed iteration variables preserve their original semantics.
+
+Interleaved previous/new/Erlang programs, one scheduler, three warmups and 21
+samples per variant, on the same Apple M4 Pro / macOS ARM64 / OTP 29 JIT setup:
+
+| Workload | Previous (ms) | Native range (ms) | Erlang (ms) |
+| --- | ---: | ---: | ---: |
+| lists | 1.664 | 1.355 | 0.934 |
+| strings | 7.032 | 6.047 | 42.143 |
+
+Lists improved 18.6%, with 548,680 -> 388,678 reductions (29.2% fewer). Strings
+improved 14.0%, with 1,664,598 -> 1,322,275 reductions (20.6% fewer); this workload
+also ranges over lists. The string reference still uses different library
+implementations. Neither workload allocates managed cells. All answers and final
+root/cell cleanup checks passed; no tests or other benchmarks ran concurrently.
+
+The separate full suite used 21 samples and three warmups across all four
+languages. All 672 measured runs passed. Median milliseconds:
+
+| Workload | Linglang | Erlang | Elixir | Go |
+| --- | ---: | ---: | ---: | ---: |
+| arithmetic | 5.133 | 4.168 | 4.137 | 0.030 |
+| calls | 5.082 | 4.051 | 3.966 | 0.024 |
+| structs | 8.346 | 7.287 | 7.176 | 0.026 |
+| pointers | 79.508 | 4.764 | 5.035 | 0.026 |
+| lists | 1.446 | 0.987 | 0.981 | 0.131 |
+| maps | 4.179 | 3.260 | 3.226 | 0.349 |
+| strings | 6.263 | 42.110 | 41.932 | 0.740 |
+| messages | 25.445 | 16.430 | 16.474 | 1.503 |
+
+These application results use the Go-seeded optimized backend. Small changes in
+unaffected workloads are not attributed to range lowering. Raw reports and
+generated-source hashes are in `_build/range-native/applications.json`,
+`paired-lists.json`, and `paired-strings.json`. The local paired_applications.py
+reuses the standard measurement body with preserved before/after modules.
+
+### Noncollecting calls and native helpers — 2026-10-05
+
+The seed now omits redundant managed-GC checks in pointer-free callers of proven
+noncollecting leaf functions and an audited set of native collection/text
+helpers. Rooted callers, recursion, unknown calls, and blocking helpers retain
+the conservative protocol. Native BEAM allocation and GC still operate normally.
+
+On Apple M4 Pro / macOS ARM64, OTP 29 / ERTS 17.1 JIT, old and new generated
+programs were interleaved with the Erlang reference in one VM using one scheduler,
+three warmups and 21 samples per variant. Each sample ran in a fresh process and
+checked its answer and final managed-root/cell cleanup. No tests or other
+repository benchmarks ran concurrently. Median milliseconds:
+
+| Workload | Before | After | Erlang | Elapsed-time reduction |
+| --- | ---: | ---: | ---: | ---: |
+| calls | 11.418 | 4.993 | 3.976 | 56.3% |
+| lists | 4.087 | 1.644 | 0.920 | 59.8% |
+| maps | 6.064 | 4.103 | 3.236 | 32.3% |
+| strings | 12.760 | 7.091 | 41.906 | 44.4% |
+
+Calls dropped from 3,905,024 to 1,500,296 reductions; lists from 1,674,366 to
+548,680; maps from 1,312,028 to 550,471; strings from 3,912,242 to 1,664,598.
+These workloads allocate no managed cells in either version. String reference
+library differences still apply; this is not a general language-speed claim.
+
+The complete four-language run used 21 samples and three warmups too:
+
+| Workload | Linglang | Erlang | Elixir | Go |
+| --- | ---: | ---: | ---: | ---: |
+| arithmetic | 5.303 | 4.207 | 4.196 | 0.028 |
+| calls | 5.412 | 4.147 | 4.263 | 0.027 |
+| structs | 8.285 | 7.356 | 7.157 | 0.024 |
+| pointers | 79.444 | 4.626 | 4.952 | 0.028 |
+| lists | 1.678 | 0.938 | 0.938 | 0.128 |
+| maps | 4.157 | 3.264 | 3.260 | 0.329 |
+| strings | 7.239 | 41.901 | 41.473 | 0.741 |
+| messages | 25.439 | 16.524 | 16.505 | 1.499 |
+
+All 672 measured runs passed. Go used GOMAXPROCS=1; runtime versions are saved
+in the report. The pointer workload remains roughly 17 times the Erlang
+value-threading reference. Application results concern the Go-seeded optimized
+backend; the bootstrap emitter still uses cells for mutable control-flow state.
+
+Raw full-suite reports: `_build/benchmarks/current-2026-10-05.json` (before) and
+`optimized-2026-10-05.json` (after). Interleaved comparisons and generated-source
+hashes: `_build/bootstrap-readonly/paired-{calls,lists,maps,strings}.json`.
+The local `paired_applications.py` reuses the repository benchmark's measurement
+body against preserved before/after generated modules. These files are ignored.
+
+### Previous four-language local results — 2026-10-04
 
 The current working tree, including leaf-call optimization and type-aware cell
 tracing, was measured twice on the same Apple M4 Pro / macOS ARM64 machine,
@@ -271,6 +361,81 @@ different lowerings can produce different output. Use `--no-opt` with compilers
 that support the original cell lowering. A compiler-source corpus measures a
 rebuild's emission cost; OTP compilation and executable packaging remain outside
 this measurement. Avoid running tests or other benchmarks concurrently.
+
+### Native bootstrap range cursors — 2026-10-05
+
+The bootstrap emitter now uses a native cursor/index through list_range/4,
+retaining scoped iteration bindings and typed managed roots. The cell emitter
+remains available with --no-opt. Actual packed previous/new self-built compilers
+were compared on the same frozen absolute corpus paths, with an OTP-only PATH,
+one scheduler, and no concurrent tests or repository benchmarks.
+
+Seven lexer samples and two warmups per compiler, interleaved, gave:
+
+| Metric | Previous | Native range |
+| --- | ---: | ---: |
+| Median milliseconds | 743.973 | 691.085 |
+| Reductions | 167,846,992 | 152,737,285 |
+| Managed allocations | 248,376 | 236,126 |
+| Peak live cells | 409 | 382 |
+| Collections | 970 | 922 |
+
+Lexer elapsed time fell 7.1%, reductions 9.0%, and allocations 4.9%. One isolated
+full-compiler pair took 134.887 -> 124.201 seconds (7.9% less elapsed time), with
+23,422,348,274 -> 21,560,696,105 reductions (8.0% fewer),
+3,205,379 -> 3,061,894 allocations (4.5% fewer), 12,513 -> 11,952 collections,
+and 440 -> 433 peak cells. The full-corpus timing is a single paired observation.
+All final managed cells and root entries/frames were zero.
+
+Reports: `_build/range-native/lexer-comparison.json` and `rebuild-comparison.json`.
+Output differs across lowerings but is deterministic within each compiler.
+The separate range-step B/C/D proof agrees on 1,225,743 bytes, SHA-256
+`0139b0480d30f8e205ddae79847edaf54df73d732bc0b5da7ec7370a09280ece`,
+with actual-C execution, diagnostics, CLI lifecycle and GC cleanup checks.
+The final Go seed reproduces that output. Refreshed D also reproduces C's frozen
+lexer output and passes collection execution under forced GC with clean final
+cells/roots. The --no-opt frozen lexer output still
+matches the previous compiler byte for byte; `cell-oracle.json` records its hash.
+
+### Read-only locals in complex functions — 2026-10-05
+
+Read-only primitive locals, including range declarations, now use native BEAM
+values inside branches and loops. Mutable/addressed bindings retain cells.
+Actual packed self-built compilers were compared on the unchanged absolute
+frozen corpus paths under `_build/bootstrap-opt/corpus`, with one scheduler,
+an OTP-only PATH, and no concurrent tests or repository benchmarks.
+
+Seven measured lexer samples plus two warmups per compiler, interleaved, gave:
+
+| Metric | Before | After |
+| --- | ---: | ---: |
+| Median milliseconds | 854.194 | 756.005 |
+| Reductions | 186,107,804 | 167,854,647 |
+| Managed allocations | 334,120 | 248,376 |
+| Peak live cells | 412 | 409 |
+| Collections | 1,305 | 970 |
+
+That is 11.5% less elapsed time and 25.7% fewer managed allocations. A single
+isolated pair for the full frozen compiler corpus took 152.550 -> 134.986 seconds
+(11.5% less time), with 4,360,235 -> 3,205,379 allocations (26.5% fewer),
+26,698,917,605 -> 23,423,383,241 reductions (12.3% fewer), and
+17,024 -> 12,513 collections. Peak live cells fell from 447 to 440. Treat the
+full-corpus timing as one paired local observation, not a stable speed estimate.
+
+Every sample finished with zero managed cells, root entries, and root frames.
+Different native lowering produces different Erlang source; output hashes are
+stable within each compiler. The current-source B/C proof separately verifies
+byte-identical compiler output at 1,245,245 bytes, SHA-256
+`3238308b078fd95ba1df74091b09494b720a6b1cf54186e3f6994a80d6a1bdc9`,
+and actual-C execution/diagnostics/CLI lifecycle/GC cleanup. It is distinct from
+the frozen-corpus performance measurement. Reports are
+`_build/bootstrap-readonly/lexer-comparison.json` and `rebuild-comparison.json`;
+the proof is `proof-final.txt`. The Go seed's separate noncollecting-call changes
+do not change this bootstrap compiler output, verified by the final seed hash.
+The old/new `--no-opt` frozen-lexer output also matches byte for byte: 87,217 bytes,
+SHA-256 `679a8c115de83977334fbb8036f9d920a1ea59fe6746d19e79bcbf6cf706d2f1`.
+
+### Earlier native-local measurements
 
 The first native-local bootstrap slice was measured on macOS ARM64 / OTP 29,
 using the pre-change compiler and lexer sources frozen from `ae37e05`. The lexer

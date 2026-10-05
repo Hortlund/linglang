@@ -97,6 +97,38 @@ func main() {
  println(*lastValue, n)
 }
 `, "0 2 10 30 false false\n6 6\n"},
+		{"range_private_cursor_and_aliased_targets", `
+func main() {
+ n:=99
+ for n,n=range (List[int]{4,7}) { println(n); n=100 }
+ println(n)
+ for n,n=range (List[int]{}) { panic("empty") }
+ println(n)
+ for i,v:=range (List[int]{10,20,30}) {
+  println(i,v)
+  i=100; v=200
+  if v==200 { continue }
+ }
+}
+`, "4\n7\n100\n100\n0 10\n1 20\n2 30\n"},
+		{"range_head_and_tail_survive_binding_safe_points", `
+type Node struct { n int }
+func node(n int) *Node { return &Node{n:n} }
+func churn() { for i:=0;i<30;i++{_=node(i)} }
+func main() {
+ var keys List[*int]
+ var saved *Node
+ for i,p:=range (List[*Node]{node(10),node(20),node(30)}) {
+  keys=prepend(&i,keys)
+  churn()
+  println(i,p.n)
+  if i==0{saved=p;continue}
+  if i==1{break}
+ }
+ churn()
+ println(saved.n,*head(keys).value,*head(tail(keys)).value)
+}
+`, "0 10\n1 20\n10 1 0\n"},
 		{"pointer_lists_and_recursive_local_types", `
 type Node struct { n int; children List[Node]; links List[*Node] }
 func makeNode(n int) *Node { return &Node{n: n} }

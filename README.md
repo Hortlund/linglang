@@ -272,6 +272,8 @@ a process is a guy. `Pid` tells you which guy.
 | `spawn(worker, args)` | start another guy. returns a `Pid`. |
 | `spawnMonitor(worker, args)` | start a guy and watch him. returns `.pid` and `.monitor`. |
 | `send(pid, value)` | put a typed value in his mailbox. |
+| `sendAfter(pid, value, delayMillis)` | schedule a typed message with a native BEAM timer; returns a `Timer`. |
+| `cancelTimer(timer)` | cancel a pending timer; returns whether cancellation succeeded. |
 | `receive[T](timeout)` | wait for a matching type; returns `.value` and `.ok`. |
 | `monitor(pid)` | start watching an existing guy. |
 | `wait(watcher, timeout)` | returns `.pid`, `.ok`, `.normal`, and `.reason` when he dies. |
@@ -282,7 +284,7 @@ of time to think about what you've done.
 
 messages are value snapshots. their complete type schema is checked, including
 list elements and map keys and values. sendable lists and maps also work as
-worker arguments. pointers, monitors, and supervisor handles can't cross a
+worker arguments. pointers, timers, monitors, and supervisor handles can't cross a
 process boundary. recursive local structs, lists, and maps work; recursive
 message schemas don't. the envelope would never end.
 
@@ -294,6 +296,27 @@ go run ./cmd/linglang run examples/counter.lang
 ```
 
 four guys count to 4000. one guy keeps the number. none of this required four guys.
+
+delayed messages use the same types and immutable snapshots as `send`:
+
+```go
+type Tick struct { number int }
+
+timer := sendAfter(self(), Tick{number: 1}, 100)
+message := receive[Tick](1000)
+if message.ok {
+    println(message.value.number)
+}
+cancelTimer(timer) // false if it already fired
+```
+
+delays are 0 through 2,147,483,647 milliseconds. a zero delay schedules delivery;
+it does not promise the message is already in the mailbox when the call returns.
+`Timer` handles belong to the process that created them. cancellation returns
+false for an expired or already canceled timer and never removes a delivered
+message. a timer survives its sender's exit if the destination stays alive;
+BEAM cancels it when the destination process exits. destinations must be local
+PIDs. these are [native BEAM timers](https://www.erlang.org/doc/apps/erts/erlang.html#send_after/3).
 
 ## adult supervision
 
@@ -313,6 +336,19 @@ the default is permanent. death is a suggestion.
 and child name. `stopSupervisor(supervisor)` shuts down the whole family.
 `ChildOptions.shutdownMillis` controls the shutdown timeout. supervisor handles
 belong to their owner; share `supervisorPid(supervisor)` if someone needs its PID.
+
+the self-hosted compiler now supports these process and supervisor operations,
+including typed timers. try a worker that crashes, gets replaced by OTP, and
+receives a scheduled retry:
+
+```sh
+./bin/linglang-bootstrap run examples/resilient_worker.lang
+```
+
+the coordinator keeps the job and explicitly retries it. supervisor restarts
+do not recover in-memory work or guarantee exactly-once processing. use job IDs
+and idempotent effects when building real worker protocols. the OTP crash report
+in this example is expected.
 
 ```sh
 go run ./cmd/linglang run examples/supervision.lang
@@ -770,8 +806,9 @@ constant strings keep shared chunks when they grow. `len` does not need a
 gigabyte allocation to count a gigabyte. values above 2,000,000,000 bytes get
 a diagnostic before concatenation.
 
-this is still an early type pass. complete control-flow checks and OTP message
-safety still need the seed compiler. `types ok` means
+this is still an early type pass. it now rejects process-local pointers,
+owner-local handles, and recursive schemas at message boundaries. complete
+control-flow checks still need the emitter or seed compiler. `types ok` means
 this pass succeeded; it does not promise the seed can compile the program.
 the runtime and OTP stay underneath.
 
@@ -811,7 +848,9 @@ try `./bin/linglang-emitter examples/bootstrap_collections.lang`.
 
 the emitter sorts files, retains checked expression types and bindings,
 and rejects unsupported constructs with source locations before printing a module.
-OTP calls, remaining native helpers, multiple assignment, and `if`
+Typed processes, monitors, supervisors, and delayed messages now work in the
+self-hosted emitter, with the same message schemas as the seed. Remaining
+native helpers, multiple assignment, and `if`
 initializers still need the seed backend. map range, indexed list literals, and
 elided pointer literals remain unsupported by both emitters. runtime conversions
 support identity casts only; variable declarations need one named variable per
@@ -823,24 +862,33 @@ compiler source. The opt-in proof also compiles C and checks execution, source
 diagnostics, and GC cleanup. On the local macOS ARM64 / OTP 29 run, B rebuilt C
 in about three minutes after type-aware tracing removed repeated scans of
 pointer-free AST/metadata values. A minimal Linglang-written CLI now supports
-`check`, `emit`, `build`, and `run`. Its first optimized lowering uses ordinary
+`check`, `emit`, `build`, and `run`. Its optimized lowering uses ordinary
 BEAM values for non-addressed primitive parameters and straight-line primitive
-locals. Mutable parameters in functions with branches or loops, locals crossing
-those constructs, and addressable variables retain managed cells. Formatter,
-test runner, control-flow optimization, and full seed-language coverage still
-need further work.
+locals, plus read-only primitive locals inside branches, nested scopes, and loops.
+Read-only range bindings are native too. Mutable bindings in functions with
+control flow, aggregate locals, and addressable variables retain managed cells.
+List ranges now keep their private cursor and index in native values, with
+scoped callbacks preserving fresh iteration cells where required. The Go seed
+also matches list heads/tails directly in its optimized control-flow graph.
+Formatter, test runner, mutable control-flow optimization, and full seed-language
+coverage still need further work.
 
-The binding-analysis follow-up shares resolved variable identities and skips
-scans that cannot select a native local. On the same frozen inputs, fresh paired
-runs improved lexer compilation 2.9% across seven samples and full compiler
-emission 15.2% in one pair; reductions fell 6.9% and 8.5%, respectively.
-Both native and cell modes preserve complete emitted source. The latest B/C/D
-proof agrees on 1,257,860 emitted bytes (SHA-256
-`6d621f5ac59de3d22dab2e3f7abcbd669c41c07429f9552ec6f5bdc8dce14017`),
+The read-only-local follow-up reduced lexer compilation time 11.5% across seven
+paired samples and full compiler emission 11.5% in one isolated pair on frozen
+inputs. Managed allocations fell 25.7% and 26.5%, respectively. The subsequent
+native-range step reduced lexer time another 7.1% across seven samples, and
+full compiler emission 7.9% in one isolated pair. After adding OTP emission and
+timers, the B/C/D proof agrees on 1,279,679 emitted bytes (SHA-256
+`b9812c001ea0f94e456c1dd93aadb5759e58339e343013095ec83f9e867bdc77`),
 with forced-GC execution and clean final cells/roots. See
 [benchmark details](benchmarks/README.md) for measurement boundaries and limits.
-Next: read-only primitive locals in functions with branches or loops, followed
-by a Linglang-written test runner.
+Next: native mutable state across branches and loops, and a Linglang-written
+test runner. The Go seed also omits redundant managed-GC checks in pointer-free
+callers of proven noncollecting leaf functions and native collection/text helpers;
+rooted and unproven calls keep their checks. Paired application measurements
+reduced calls, lists, maps, and strings elapsed time by 56%, 60%, 32%, and 44%.
+Native range lowering then reduced lists another 18.6% and strings 14.0% in
+paired runs; the list workload is now about 1.45 times its Erlang reference.
 
 Run the full proof explicitly; it stays outside ordinary tests and push CI:
 
@@ -920,6 +968,29 @@ the program and runtime need to live in the same build directory.
 ./bin/linglang test --no-opt --gc-stress --gc-stats --timeout 2m bootstrap/emitter
 ./bin/linglang fmt --check bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang examples/bootstrap_collections.lang
 ```
+
+## compiler direction
+
+the next backend candidate is direct Erlang abstract forms, following
+[Gleam's approach](https://gleam.run/news/gleam-doesnt-compile-to-erlang-source-anymore/).
+the bootstrap already calls OTP's `compile:forms`, but first generates and
+reparses Erlang text. emitting forms directly could reduce compilation work and
+preserve `.lang` source locations in stack traces. this is planned, not implemented
+or benchmarked. imperative C/Go-style syntax and real BEAM/OTP execution stay.
+OTP still produces the bytecode; runtime speed needs separate optimization.
+
+the migration should keep source emission available, compare behavior under both
+optimization modes and forced GC, repeat bootstrap convergence, and measure
+compilation separately from application runtime.
+
+linglang is statically typed. the seed uses Go's type checker; bootstrap has its
+own checker, with some control-flow checks completed during emission. message
+payloads have checked schemas and runtime validation, but a plain `Pid` does not
+declare which messages its receiver accepts. sending a string to a process
+waiting for an integer can compile; `receive[int]` won't consume that string.
+typed destinations such as a future `Actor[Message]` are a separate design
+candidate, not an existing API. static typing doesn't prevent nil dereferences,
+timeouts, or worker crashes.
 
 ## why
 

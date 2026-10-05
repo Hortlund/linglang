@@ -29,7 +29,7 @@ func emitRequireType(e *Emitter, id int, at Token) {
 			for _, field := range t.fields {
 				pending = prepend(field.typeID, pending)
 			}
-		} else if !emitPrimitive(current) {
+		} else if t.kind != "handle" && !emitPrimitive(current) {
 			emitFail(e, at, "bootstrap emitter does not support this value type")
 		}
 	}
@@ -46,7 +46,7 @@ func emitZero(e *Emitter, id int, at Token) string {
 		return "0"
 	}
 	t := get(e.checked.types, id).value
-	if t.kind == "pointer" || t.kind == "list" || t.kind == "map" {
+	if t.kind == "pointer" || t.kind == "list" || t.kind == "map" || t.kind == "handle" {
 		return "nil"
 	}
 	e.depth++

@@ -47,6 +47,9 @@ func TestBootstrapSelfHostProof(t *testing.T) {
 	}
 	otp := filepath.Join(dir, "otp")
 	env := isolatedOTPEnvironment(t, otp, true)
+	// Expected OTP restart reports contain timestamps and PIDs. Silence them
+	// only in this deterministic output oracle, including its packed children.
+	env = append(env, "ERL_FLAGS=-kernel logger_level emergency")
 	invoke := func(name string, args ...string) (string, string, error) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -134,6 +137,13 @@ func TestBootstrapSelfHostProof(t *testing.T) {
 		testBootstrapRunLifetime(t, artifact, env)
 	})
 	for _, f := range []struct{ name, code, want string }{
+		{"otp_timers", otpTimerFixture, otpTimerOutput},
+		{"otp_messages", otpMessagesFixture, "true 7 true 8\nfalse 0 true true\ntrue true true\n"},
+		{"otp_supervisor", otpSupervisorFixture, "true true true\ntrue true true\ntrue true true\n"},
+		{"otp_restart", otpRestartFixture, "true true true\ntrue true\n"},
+		{"native_range", nativeRangeFixture, "4\n7\n100\n100\n0 10\n1 20\n2 30\n"},
+		{"readonly_scopes", readonlyScopesFixture, "1 0 ok true\n2\n3\n1\n4\n1\n8\n0 10\n2 32\n1\n"},
+		{"readonly_iteration_escape", readonlyEscapeFixture, "10 11\n20 30\ntrue true\n"},
 		{"native_locals", `func f(n int,s string,b bool)int{n++;x:=n;n+=x;x*=2;s+="!";b=!b;println(n,x,s,b);return x};func main(){println(f(3,"ok",true))}`, "8 8 ok! false\n8\n"},
 		{"range_parameter_assignment", `func f(i,n int)int{for i,n=range (List[int]{4,7}){println(i,n)};return i+n};func main(){println(f(10,20))}`, "0 4\n1 7\n8\n"},
 		{"control_and_collections", `func main(){total:=0;for _,n:=range (List[int]{1,2,3}){switch n{case 2:continue;default:m:=Map[int,int]{n:n*2};total+=get(m,n).value;break}};println(total)}`, "8\n"},

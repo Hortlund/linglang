@@ -27,6 +27,9 @@ func emitReferences(e *Emitter, id int) bool {
 		}
 		t := get(e.checked.types, current).value
 		switch t.kind {
+		case "handle":
+			// Runtime handles contain no managed language pointers.
+			continue
 		case "list", "delivery":
 			pending = prepend(t.elem, pending)
 		case "map":

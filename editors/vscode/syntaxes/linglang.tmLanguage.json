@@ -127,7 +127,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.linglang",
-          "match": "\\b(?:append|args|assert|byteAt|demonitor|formatInt|get|head|isDigit|isLetter|join|len|lookupChild|make|monitor|new|panic|parseInt|prepend|print|println|put|readFile|receive|remove|removeChild|restartChild|runeAt|self|send|slice|spawn|spawnMonitor|split|startSupervisor|stopChild|stopSupervisor|supervise|supervisorPid|tail|trim|wait|writeFile)\\b"
+          "match": "\\b(?:append|args|assert|byteAt|cancelTimer|demonitor|formatInt|get|head|isDigit|isLetter|join|len|lookupChild|make|monitor|new|panic|parseInt|prepend|print|println|put|readFile|receive|remove|removeChild|restartChild|runeAt|self|send|sendAfter|slice|spawn|spawnMonitor|split|startSupervisor|stopChild|stopSupervisor|supervise|supervisorPid|tail|trim|wait|writeFile)\\b"
         }
       ]
     },
@@ -135,7 +135,7 @@
       "patterns": [
         {
           "name": "support.type.linglang",
-          "match": "\\b(?:Child|ChildOptions|Delivery|Exit|IOResult|IntResult|List|Map|Monitor|Pid|Process|RuneResult|Supervisor|TextResult|bool|int|string)\\b"
+          "match": "\\b(?:Child|ChildOptions|Delivery|Exit|IOResult|IntResult|List|Map|Monitor|Pid|Process|RuneResult|Supervisor|TextResult|Timer|bool|int|string)\\b"
         }
       ]
     },

@@ -202,6 +202,9 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 		return ""
 	}
 	function := emitValue(e, callee)
+	if function.kind == "intrinsic" && emitProcessIntrinsic(function.name) {
+		return emitProcessCall(e, node, function.name)
+	}
 	collection := function.kind == "intrinsic" && (function.name == "prepend" || function.name == "head" || function.name == "tail" || function.name == "get" || function.name == "put" || function.name == "remove")
 	if (childAt(node, 0).kind != "Ident" && !collection && function.kind != "native") || (node.text != "" && !(function.kind == "intrinsic" && function.name == "append")) {
 		emitFail(e, node.at, "bootstrap emitter requires a supported direct call")
@@ -263,6 +266,30 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 	if function.kind == "native" {
 		target := ""
 		switch function.name {
+		case "self":
+			target = "self"
+		case "monitor":
+			target = "linglang_rt:monitor_process"
+		case "wait":
+			target = "linglang_rt:wait_process"
+		case "demonitor":
+			target = "linglang_rt:demonitor_process"
+		case "cancelTimer":
+			target = "linglang_rt:cancel_timer"
+		case "startSupervisor":
+			target = "linglang_sup:start"
+		case "supervisorPid":
+			target = "linglang_sup:pid"
+		case "lookupChild":
+			target = "linglang_sup:lookup"
+		case "restartChild":
+			target = "linglang_sup:restart"
+		case "stopChild":
+			target = "linglang_sup:stop_child"
+		case "removeChild":
+			target = "linglang_sup:remove_child"
+		case "stopSupervisor":
+			target = "linglang_sup:stop"
 		case "args":
 			target = "linglang_rt:arguments"
 		case "readFile":

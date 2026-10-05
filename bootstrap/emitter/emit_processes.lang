@@ -1,0 +1,105 @@
+package main
+
+func emitProcessIntrinsic(name string) bool {
+	return name == "spawn" || name == "spawnMonitor" || name == "send" || name == "sendAfter" || name == "receive" || name == "supervise"
+}
+
+// Match the seed's fully qualified type names, including generic arguments.
+// The checker has already rejected recursive or process-local message types.
+func emitMessageTypeName(e *Emitter, id int) string {
+	switch id {
+	case tInt:
+		return "int"
+	case tBool:
+		return "bool"
+	case tString:
+		return "string"
+	}
+	t := get(e.checked.types, id).value
+	switch t.kind {
+	case "list":
+		return "main.List[" + emitMessageTypeName(e, t.elem) + "]"
+	case "map":
+		return "main.Map[" + emitMessageTypeName(e, t.key) + ", " + emitMessageTypeName(e, t.elem) + "]"
+	case "delivery":
+		return "main.Delivery[" + emitMessageTypeName(e, t.elem) + "]"
+	}
+	return "main." + t.name
+}
+
+func emitMessageSchema(e *Emitter, id int) string {
+	switch id {
+	case tInt:
+		return "int"
+	case tBool:
+		return "bool"
+	case tString:
+		return "string"
+	}
+	t := get(e.checked.types, id).value
+	switch t.kind {
+	case "handle":
+		return "pid"
+	case "list":
+		return "{list, " + emitMessageSchema(e, t.elem) + "}"
+	case "map":
+		return "{map, " + emitMessageSchema(e, t.key) + ", " + emitMessageSchema(e, t.elem) + "}"
+	}
+	fields := t.fields
+	if t.kind == "delivery" {
+		fields = List[CheckedField]{CheckedField{name: "value", typeID: t.elem}, CheckedField{name: "ok", typeID: tBool}}
+	}
+	var shapes List[string]
+	for _, field := range fields {
+		shapes = append(shapes, "{"+emitFieldName(field.name)+", "+emitMessageSchema(e, field.typeID)+"}")
+	}
+	return "{named, " + emitBinaryString(emitMessageTypeName(e, id)) + ", {struct, [" + join(shapes, ", ") + "]}}"
+}
+
+func emitProcessCall(e *Emitter, node SyntaxNode, name string) string {
+	id := emitValue(e, node).messageType
+	if id == tInvalid {
+		emitFail(e, node.at, "missing checked message type")
+		return ""
+	}
+	schema := emitMessageSchema(e, id)
+	workerIndex := -1
+	if name == "spawn" || name == "spawnMonitor" {
+		workerIndex = 0
+	} else if name == "supervise" {
+		workerIndex = 2
+	}
+	worker := ""
+	var codes List[string]
+	var ids List[int]
+	for i, argument := range tail(node.children) {
+		if i == workerIndex {
+			if argument.kind != "Ident" || emitValue(e, argument).kind != "func" {
+				emitFail(e, argument.at, name+" requires a named language function")
+				return ""
+			}
+			worker = "fun " + emitFunctionName(argument.text) + "/1"
+		} else {
+			codes = append(codes, emitExpression(e, argument, false))
+			ids = append(ids, emitValue(e, argument).typeID)
+		}
+	}
+	target := ""
+	switch name {
+	case "spawn", "spawnMonitor":
+		monitored := "false"
+		if name == "spawnMonitor" {
+			monitored = "true"
+		}
+		target = "fun(A) -> linglang_rt:spawn_process(" + worker + ", A, " + schema + ", " + monitored + ") end"
+	case "supervise":
+		target = "fun(S, N, A, O) -> linglang_sup:add(S, N, " + worker + ", A, " + schema + ", O) end"
+	case "send":
+		target = "fun(P, V) -> linglang_rt:send_message(P, " + schema + ", V) end"
+	case "sendAfter":
+		target = "fun(P, V, T) -> linglang_rt:send_after(P, " + schema + ", V, T) end"
+	case "receive":
+		target = "fun(T) -> linglang_rt:receive_message(" + schema + ", T, " + emitZero(e, id, node.at) + ") end"
+	}
+	return emitOrdered(e, codes, ids, target)
+}

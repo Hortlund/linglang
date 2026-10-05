@@ -1,6 +1,7 @@
 package main
 
 func emitBlock(e *Emitter, node SyntaxNode) string {
+	values := e.values
 	var parts List[string]
 	for _, statement := range node.children {
 		parts = append(parts, "linglang_rt:safepoint()")
@@ -10,6 +11,9 @@ func emitBlock(e *Emitter, node SyntaxNode) string {
 	if e.straight {
 		return "(begin " + join(parts, ",\n        ") + " end)"
 	}
+	// The generated scope is a closure. Its declarations dominate reads inside
+	// that closure, but must not become available to sibling or outer scopes.
+	e.values = values
 	return emitScope(join(parts, ",\n        "))
 }
 
@@ -92,7 +96,7 @@ func emitFor(e *Emitter, node SyntaxNode) string {
 	key := ""
 	if initializer.kind == "AssignStmt" && initializer.text == ":=" {
 		name := head(childAt(initializer, 0).children).value
-		if name.kind == "Ident" && name.text != "_" {
+		if name.kind == "Ident" && name.text != "_" && !get(e.valueLocals, sourceIdentity(name.at)).value {
 			key = sourceIdentity(name.at)
 			initial = emitCell(e, name, true)
 			iteration = emitFresh(e)
