@@ -1,0 +1,132 @@
+package concurrency
+
+type Job struct {
+	id   int
+	stop bool
+}
+
+type Completed struct {
+	worker Pid
+	id     int
+	value  int
+}
+
+func poolWorker(parent Pid) {
+	for {
+		job := receive[Job](5000)
+		assert(job.ok)
+		if job.value.stop {
+			return
+		}
+		send(parent, Completed{worker: self(), id: job.value.id, value: job.value.id * job.value.id})
+	}
+}
+
+// One outstanding job per worker provides producer-side backpressure. This is
+// bounded concurrency, not a claim that BEAM mailboxes enforce a queue limit.
+func TestBoundedWorkerPool() {
+	const workers = 64
+	const jobs = 4096
+	var processes List[Process]
+	for i := 0; i < workers; i++ {
+		p := spawnMonitor(poolWorker, self())
+		processes = append(processes, p)
+		send(p.pid, Job{id: i})
+	}
+	next := workers
+	var seen Map[int, bool]
+	for done := 0; done < jobs; done++ {
+		result := receive[Completed](5000)
+		assert(result.ok)
+		id := result.value.id
+		assert(id >= 0 && id < jobs && !get(seen, id).ok)
+		assert(result.value.value == id*id)
+		seen = put(seen, id, true)
+		if next < jobs {
+			send(result.value.worker, Job{id: next})
+			next++
+		} else {
+			send(result.value.worker, Job{stop: true})
+		}
+	}
+	assert(len(seen) == jobs)
+	for _, p := range processes {
+		exit := wait(p.monitor, 5000)
+		assert(exit.ok && exit.normal)
+	}
+}
+
+type Update struct {
+	delta int
+	crash bool
+}
+
+func counter(state *int, request Update) int {
+	if request.crash {
+		panic("requested restart")
+	}
+	*state += request.delta
+	return *state
+}
+
+type Caller struct {
+	server Pid
+	parent Pid
+}
+
+func counterClient(c Caller) {
+	for i := 0; i < 32; i++ {
+		assert(call[int](c.server, Update{delta: 1}, 5000).ok)
+	}
+	send(c.parent, true)
+}
+
+func TestConcurrentCallsAndRestart() {
+	supervisor := startSupervisor(3, 5)
+	child := superviseServer(supervisor, "counter", counter, 0, ChildOptions{})
+	assert(child.ok)
+	var clients List[Process]
+	for i := 0; i < 32; i++ {
+		clients = append(clients, spawnMonitor(counterClient, Caller{server: child.pid, parent: self()}))
+	}
+	for _, client := range clients {
+		assert(receive[bool](5000).value)
+		assert(wait(client.monitor, 5000).normal)
+	}
+	assert(call[int](child.pid, Update{}, 5000).value == 1024)
+	failed := call[int](child.pid, Update{crash: true}, 5000)
+	assert(!failed.ok && !failed.timedOut)
+	replacement := child.pid
+	deadline := monotonicMillis() + 5000
+	for replacement == child.pid && monotonicMillis() < deadline {
+		next := lookupChild(supervisor, "counter")
+		if next.ok {
+			replacement = next.pid
+		}
+		if replacement == child.pid {
+			receive[string](1)
+		}
+	}
+	assert(replacement != child.pid)
+	// Supervision restores availability, not in-memory data durability.
+	reset := call[int](replacement, Update{}, 5000)
+	assert(reset.ok && reset.value == 0)
+	assert(call[int](replacement, Update{delta: 7}, 5000).value == 7)
+	assert(!call[int](child.pid, Update{}, 5000).ok)
+	assert(stopSupervisor(supervisor))
+}
+
+func isolatedWorker(parent Pid) {
+	send(parent, 42)
+	panic("isolated worker failure")
+}
+
+func TestFailureAndMailboxIsolation() {
+	send(self(), "keep this message")
+	worker := spawnMonitor(isolatedWorker, self())
+	assert(receive[int](5000).value == 42)
+	exit := wait(worker.monitor, 5000)
+	assert(exit.ok && !exit.normal)
+	assert(receive[string](0).value == "keep this message")
+	assert(!receive[int](0).ok)
+}

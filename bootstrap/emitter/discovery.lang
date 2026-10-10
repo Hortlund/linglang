@@ -1,0 +1,185 @@
+package main
+
+type ToolCommand struct {
+	name    string
+	usage   string
+	summary string
+}
+type ToolCapability struct {
+	name   string
+	status string
+	notes  string
+}
+type NativeDeclaration struct {
+	name        string
+	kind        string
+	declaration string
+}
+
+func bootstrapCommands() List[ToolCommand] {
+	return List[ToolCommand]{
+		ToolCommand{name: "init", usage: "init [directory]", summary: "Create a project in a new or empty directory."},
+		ToolCommand{name: "describe", usage: "describe [--json]", summary: "Describe this driver's commands, capabilities and native API."},
+		ToolCommand{name: "deps", usage: "deps [--check] [--json] [file.lang|directory]", summary: "Record or verify local dependency source hashes; no fetching or execution."},
+		ToolCommand{name: "check", usage: "check [--json] [--tests] [--no-opt] <file.lang|directory>", summary: "Validate supported source through lowering without running it."},
+		ToolCommand{name: "emit", usage: "emit [--no-opt] <file.lang|directory>...", summary: "Print Erlang source."},
+		ToolCommand{name: "build", usage: "build [--no-opt] [--gc-stress] [--gc-stats] [-o executable] <file.lang|directory>...", summary: "Package an executable that requires OTP."},
+		ToolCommand{name: "run", usage: "run [--no-opt] [--gc-stress] [--gc-stats] <file.lang|directory>... [-- args...]", summary: "Compile and execute a program with OTP."},
+		ToolCommand{name: "test", usage: "test [--json] [--no-opt] [--gc-stress] [--gc-stats] [--timeout 30s] [file_test.lang|directory]", summary: "Run root Test functions in isolated VMs with per-test deadlines."},
+		ToolCommand{name: "fmt", usage: "fmt [--check] [file.lang|directory ...]", summary: "Format supported source with the Linglang whitespace style."},
+	}
+}
+func bootstrapCapabilities() List[ToolCapability] {
+	return List[ToolCapability]{
+		ToolCapability{name: "structured-check", status: "supported", notes: "check --json schema version 1; first error, full lowering; --tests validates library/test roots without execution."},
+		ToolCapability{name: "structured-tests", status: "supported", notes: "test --json emits version-1 JSON Lines; child output goes to stderr."},
+		ToolCapability{name: "local-imports", status: "supported", notes: "Relative directory imports, ASCII uppercase exports, file-local aliases, one linked BEAM module."},
+		ToolCapability{name: "dependency-lock", status: "supported", notes: "deps --check explicitly verifies local source hashes; builds do not enforce the lock. deps --json reports version-1 results."},
+		ToolCapability{name: "otp-processes", status: "supported", notes: "Typed messages, monitors, timers, supervisors and synchronous servers. Pointers stay process-local."},
+		ToolCapability{name: "tcp", status: "supported", notes: "Passive, owner-local sockets and typed I/O results."},
+		ToolCapability{name: "sqlite", status: "supported", notes: "Requires optional linglang-sqlite helper. One connection and statement per call; no multi-call transactions."},
+		ToolCapability{name: "http", status: "limited", notes: "Checkout source library stdlib/http has bounded single-request HTTP/1.1 support; no TLS or request bodies. Not embedded in this compiler."},
+		ToolCapability{name: "remote-packages", status: "unavailable", notes: "No registry, fetching, version solver or install hooks."},
+		ToolCapability{name: "user-generics", status: "unavailable", notes: "Generic native operations exist; user-defined generic declarations are unsupported."},
+		ToolCapability{name: "self-hosted-tooling", status: "limited", notes: "check/emit/build/run/test/fmt/init/describe/deps run on OTP without Go. lsp and release remain Go-driver commands."},
+		ToolCapability{name: "language-subset", status: "limited", notes: "The bootstrap supports fewer literal/allocation forms than the seed. Multiple assignment, interfaces and general Go packages are unsupported."},
+	}
+}
+func nativeTypeText(c *Checker, id int) string {
+	if id == tInt {
+		return "int"
+	}
+	if id == tBool {
+		return "bool"
+	}
+	if id == tString {
+		return "string"
+	}
+	if id == tVoid {
+		return ""
+	}
+	t := checkedType(c, id)
+	if t.name != "" {
+		return t.name
+	}
+	if t.kind == "list" {
+		return "List[" + nativeTypeText(c, t.elem) + "]"
+	}
+	if t.kind == "pointer" {
+		return "*" + nativeTypeText(c, t.elem)
+	}
+	if t.kind == "map" {
+		return "Map[" + nativeTypeText(c, t.key) + ", " + nativeTypeText(c, t.elem) + "]"
+	}
+	panic("missing native type description: " + t.kind)
+	return ""
+}
+func bootstrapNativeAPI() List[NativeDeclaration] {
+	c := Checker{next: tVoid}
+	scope := TypeScope{}
+	bindType(&scope, "int", "type", tInt)
+	bindType(&scope, "bool", "type", tBool)
+	bindType(&scope, "string", "type", tString)
+	nativeTypes(&c, &scope)
+	nativeFunctions(&c, &scope)
+	var result List[NativeDeclaration]
+	for _, name := range c.nativeNames {
+		binding := typedName(&scope, name).value
+		t := checkedType(&c, binding.typeID)
+		entry := NativeDeclaration{name: name}
+		if binding.kind == "native" {
+			entry.kind = "function"
+			labels := split(nativeParameterNames(name), " ")
+			var params List[string]
+			for i, param := range t.params {
+				label := head(labels).value
+				labels = tail(labels)
+				if label == "" {
+					label = "arg" + formatInt(i)
+				}
+				params = append(params, label+" "+nativeTypeText(&c, param))
+			}
+			entry.declaration = "func " + name + "(" + join(params, ", ") + ")"
+			if t.result != tVoid {
+				entry.declaration += " " + nativeTypeText(&c, t.result)
+			}
+		} else if t.kind == "handle" {
+			entry.kind = "opaque"
+			entry.declaration = name
+		} else if t.kind == "struct" {
+			entry.kind = "record"
+			var fields List[string]
+			for _, field := range t.fields {
+				fields = append(fields, field.name+" "+nativeTypeText(&c, field.typeID))
+			}
+			entry.declaration = "type " + name + " struct { " + join(fields, "; ") + " }"
+		} else {
+			entry = nativeGenericDeclaration(name)
+		}
+		assert(entry.name != "" && entry.declaration != "")
+		var prefix List[NativeDeclaration]
+		rest := result
+		for head(rest).ok && head(rest).value.name < entry.name {
+			prefix = prepend(head(rest).value, prefix)
+			rest = tail(rest)
+		}
+		result = prepend(entry, rest)
+		for _, item := range prefix {
+			result = prepend(item, result)
+		}
+	}
+	return result
+}
+func bootstrapDescribe(values List[string]) {
+	json := false
+	for _, value := range values {
+		if value != "--json" {
+			panic("describe accepts only --json")
+		}
+		json = true
+	}
+	commands := bootstrapCommands()
+	capabilities := bootstrapCapabilities()
+	api := bootstrapNativeAPI()
+	notes := List[string]{
+		"Compiled capabilities, not installed runtime dependencies or a compatibility guarantee. This driver needs OTP, not Go or erlc.",
+		"Ordinary native signatures and records are derived from checker metadata. Generic native signatures are checked against the independent seed catalogue. Generic declarations describe intrinsics, not user-definable generic syntax.",
+		"Operators and language builtins len/append/print/println/new/make/panic are documented separately in book/src/builtins.md. Opaque representations are hidden.",
+		"See book/src/agent-workflows.md, book/src/specification.md and book/src/architecture.md in the source checkout.",
+	}
+	if json {
+		var cs List[string]
+		for _, c := range commands {
+			cs = append(cs, "{\"name\":"+toolQuote(c.name)+",\"usage\":"+toolQuote(c.usage)+",\"summary\":"+toolQuote(c.summary)+"}")
+		}
+		var caps List[string]
+		for _, c := range capabilities {
+			caps = append(caps, "{\"name\":"+toolQuote(c.name)+",\"status\":"+toolQuote(c.status)+",\"notes\":"+toolQuote(c.notes)+"}")
+		}
+		var natives List[string]
+		for _, n := range api {
+			natives = append(natives, "{\"name\":"+toolQuote(n.name)+",\"kind\":"+toolQuote(n.kind)+",\"declaration\":"+toolQuote(n.declaration)+"}")
+		}
+		var ns List[string]
+		for _, note := range notes {
+			ns = append(ns, toolQuote(note))
+		}
+		toolReport("{\"schemaVersion\":1,\"compiler\":\"bootstrap\",\"stability\":\"experimental\",\"commands\":["+join(cs, ",")+"],\"capabilities\":["+join(caps, ",")+"],\"nativeAPI\":["+join(natives, ",")+"],\"notes\":["+join(ns, ",")+"]}", true)
+		return
+	}
+	println("Linglang — self-hosted driver (experimental)\n\nCommands:")
+	for _, c := range commands {
+		println("  linglang-bootstrap " + c.usage + "\n    " + c.summary)
+	}
+	println("\nCapabilities:")
+	for _, c := range capabilities {
+		println("  " + c.name + ": " + c.status + " — " + c.notes)
+	}
+	println("\nNative API:")
+	for _, n := range api {
+		println(n.declaration)
+	}
+	for _, note := range notes {
+		println("\n" + note)
+	}
+}

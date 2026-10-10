@@ -1,7 +1,7 @@
 {
   "name": "linglang",
-  "displayName": "linglang",
-  "description": "Language support for linglang: the bean has an editor now.",
+  "displayName": "Linglang",
+  "description": "Language support for Linglang: syntax highlighting, diagnostics, formatting, and document outlines.",
   "version": "0.1.0",
   "publisher": "linglang",
   "license": "UNLICENSED",
@@ -44,7 +44,7 @@
       }
     ],
     "configuration": {
-      "title": "linglang",
+      "title": "Linglang",
       "properties": {
         "linglang.serverPath": {
           "type": "string",

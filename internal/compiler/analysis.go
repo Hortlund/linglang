@@ -23,6 +23,8 @@ type Analysis struct {
 	Files       map[string]*ast.File
 	Info        *types.Info
 	Diagnostics []Diagnostic
+	// Dependencies includes imported files and directories, even on load errors.
+	Dependencies []string
 }
 
 func newCompiler(fset *token.FileSet) *compiler {
@@ -61,6 +63,10 @@ func Analyze(sources []SourceFile) Analysis {
 	add := func(pos token.Pos, message string) {
 		p := c.fset.PositionFor(pos, false)
 		if p.Filename != "<linglang-prelude>" {
+			if _, root := result.Files[p.Filename]; !root && len(sources) != 0 {
+				result.Diagnostics = append(result.Diagnostics, Diagnostic{sources[0].Filename, 0, fmt.Sprintf("%s: %s", p, message)})
+				return
+			}
 			result.Diagnostics = append(result.Diagnostics, Diagnostic{p.Filename, p.Offset, message})
 		}
 	}
@@ -69,12 +75,6 @@ func Analyze(sources []SourceFile) Analysis {
 		if file != nil {
 			result.Files[source.Filename] = file
 			files = append(files, file)
-			if file.Name.Name != "main" {
-				add(file.Name.Pos(), "only package main is supported")
-			}
-			for _, imp := range file.Imports {
-				add(imp.Pos(), "imports are not supported yet")
-			}
 		}
 		if errors, ok := err.(scanner.ErrorList); ok {
 			for _, issue := range errors {
@@ -87,6 +87,14 @@ func Analyze(sources []SourceFile) Analysis {
 	if len(result.Diagnostics) != 0 || len(files) == 0 {
 		return result
 	}
+	linked, linkErr := parseModuleFilesObserved(c.fset, sources, true, func(path string) {
+		result.Dependencies = append(result.Dependencies, path)
+	})
+	if linkErr != nil {
+		result.Diagnostics = append(result.Diagnostics, Diagnostic{sources[0].Filename, 0, linkErr.Error()})
+		return result
+	}
+	files = linked
 	prelude, err := c.prelude()
 	if err != nil {
 		panic(err) // The embedded, compiler-owned declaration contract is invalid.

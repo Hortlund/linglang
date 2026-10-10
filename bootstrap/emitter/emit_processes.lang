@@ -1,7 +1,7 @@
 package main
 
 func emitProcessIntrinsic(name string) bool {
-	return name == "spawn" || name == "spawnMonitor" || name == "send" || name == "sendAfter" || name == "receive" || name == "supervise"
+	return name == "call" || name == "superviseServer" || name == "spawn" || name == "spawnMonitor" || name == "send" || name == "sendAfter" || name == "receive" || name == "supervise"
 }
 
 // Match the seed's fully qualified type names, including generic arguments.
@@ -21,6 +21,8 @@ func emitMessageTypeName(e *Emitter, id int) string {
 		return "main.List[" + emitMessageTypeName(e, t.elem) + "]"
 	case "map":
 		return "main.Map[" + emitMessageTypeName(e, t.key) + ", " + emitMessageTypeName(e, t.elem) + "]"
+	case "callresult":
+		return "main.CallResult[" + emitMessageTypeName(e, t.elem) + "]"
 	case "delivery":
 		return "main.Delivery[" + emitMessageTypeName(e, t.elem) + "]"
 	}
@@ -46,8 +48,8 @@ func emitMessageSchema(e *Emitter, id int) string {
 		return "{map, " + emitMessageSchema(e, t.key) + ", " + emitMessageSchema(e, t.elem) + "}"
 	}
 	fields := t.fields
-	if t.kind == "delivery" {
-		fields = List[CheckedField]{CheckedField{name: "value", typeID: t.elem}, CheckedField{name: "ok", typeID: tBool}}
+	if t.kind == "delivery" || t.kind == "callresult" {
+		fields = resultFields(t)
 	}
 	var shapes List[string]
 	for _, field := range fields {
@@ -57,6 +59,9 @@ func emitMessageSchema(e *Emitter, id int) string {
 }
 
 func emitProcessCall(e *Emitter, node SyntaxNode, name string) string {
+	if name == "call" || name == "superviseServer" {
+		return emitServerCall(e, node, name)
+	}
 	id := emitValue(e, node).messageType
 	if id == tInvalid {
 		emitFail(e, node.at, "missing checked message type")

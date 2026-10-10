@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -16,17 +17,32 @@ import (
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "linglang:", err)
+		var reported reportedError
+		if !errors.As(err, &reported) {
+			fmt.Fprintln(os.Stderr, "linglang:", err)
+		}
 		os.Exit(1)
 	}
 }
 
 func run(args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		fmt.Println("Usage:\n  linglang run [--no-opt] [--gc-stats] [--gc-stress] <file.lang|directory> [args...]\n  linglang check [--no-opt] <file.lang|directory>\n  linglang build [--no-opt] [-o directory] <file.lang|directory>\n  linglang pack [--no-opt] [--gc-stats] [--gc-stress] [-o executable] <file.lang|directory>\n  linglang release [--no-opt] [--gc-stats] [--gc-stress] [-o archive.tar.gz] <file.lang|directory>\n  linglang emit [--no-opt] <file.lang|directory>\n  linglang test [--no-opt] [--gc-stats] [--gc-stress] [--timeout 30s] [file_test.lang|directory]\n  linglang fmt [--check] [file.lang|directory ...]\n  linglang lsp")
+		fmt.Print(commandUsage())
 		return nil
 	}
 	command := args[0]
+	if command == "check" {
+		return checkCommand(args[1:], os.Stdout, os.Stderr)
+	}
+	if command == "describe" {
+		return describeCommand(args[1:], os.Stdout, os.Stderr)
+	}
+	if command == "deps" {
+		return depsCommand(args[1:])
+	}
+	if command == "init" {
+		return initCommand(args[1:])
+	}
 	if command == "lsp" {
 		if len(args) != 1 {
 			return fmt.Errorf("lsp accepts no arguments")
@@ -39,7 +55,7 @@ func run(args []string) error {
 	if command == "test" {
 		return testCommand(args[1:])
 	}
-	if command != "run" && command != "check" && command != "build" && command != "pack" && command != "release" && command != "emit" {
+	if command != "run" && command != "build" && command != "pack" && command != "release" && command != "emit" {
 		return fmt.Errorf("unknown command %q (try linglang help)", command)
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -75,10 +91,6 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	if command == "check" {
-		fmt.Printf("Checked %s (%d source files)\n", flags.Arg(0), len(sources))
-		return nil
-	}
 	if command == "emit" {
 		fmt.Print(program)
 		return nil
@@ -98,10 +110,13 @@ func run(args []string) error {
 				output = name + "-" + runtime.GOOS + "-" + runtime.GOARCH + ".tar.gz"
 			}
 		}
-		if err := protectSources(output, sources); err != nil {
+		inputs, err := compiler.InputFiles(sources)
+		if err != nil {
 			return err
 		}
-		var err error
+		if err := protectSources(output, inputs); err != nil {
+			return err
+		}
 		if command == "release" {
 			err = release(output, program, gcStress, gcStats)
 		} else {
@@ -208,7 +223,7 @@ func evaluationScriptFor(entry string, gcStress, gcStats bool) string {
 	// Run language main in a monitored process. An OTP supervisor can terminate
 	// its owner via a link; try/catch alone cannot catch that exit signal.
 	script := fmt.Sprintf("Runner = fun() -> linglang_rt:set_gc_stress(%t), ", gcStress)
-	script += "ExitCode = try " + entry + " of _ -> 0 catch error:{linglang_assertion, File, Line} -> io:format(standard_error, \"~ts:~p: assertion failed~n\", [File, Line]), 1; Class:Reason:Stack -> io:format(standard_error, \"linglang runtime error: ~p:~p~n~p~n\", [Class, Reason, Stack]), 1 end, "
+	script += "ExitCode = try " + entry + " of _ -> 0 catch error:linglang_reported_failure -> 1; error:{linglang_assertion, File, Line} -> io:format(standard_error, \"~ts:~p: assertion failed~n\", [File, Line]), 1; Class:Reason:Stack -> io:format(standard_error, \"linglang runtime error: ~p:~p~n~p~n\", [Class, Reason, Stack]), 1 end, "
 	script += "exit({linglang_completed, ExitCode, linglang_rt:stats()}) end, "
 	script += "{Pid, Ref} = spawn_monitor(Runner), receive {'DOWN', Ref, process, Pid, {linglang_completed, Code, Stats}} -> "
 	if gcStats {

@@ -1,0 +1,59 @@
+package main
+
+func resultFields(t CheckedType) List[CheckedField] {
+	fields := List[CheckedField]{CheckedField{name: "value", typeID: t.elem}, CheckedField{name: "ok", typeID: tBool}}
+	if t.kind == "callresult" {
+		fields = append(fields, CheckedField{name: "timedOut", typeID: tBool}, CheckedField{name: "reason", typeID: tString})
+	}
+	return fields
+}
+
+func nativeServerCall(c *Checker, node SyntaxNode, name string, explicit List[int], values List[CheckedValue]) int {
+	if name == "call" {
+		requireArity(c, node, values, 3)
+		if len(explicit) < 1 || len(explicit) > 2 {
+			checkFail(c, node.at, "call requires a reply type and optionally a request type")
+			return tInvalid
+		}
+		replyType := head(explicit).value
+		requestType := head(tail(explicit)).value
+		if len(explicit) == 1 {
+			requestType = inferredValueType(c, node, valueAt(values, 1))
+			if requestType == tInvalid {
+				checkFail(c, node.at, "cannot infer call request type")
+			}
+		}
+		requireType(c, node, valueAt(values, 0), typedName(c.native, "Pid").value.typeID)
+		requireType(c, node, valueAt(values, 1), requestType)
+		requireType(c, node, valueAt(values, 2), tInt)
+		checkMessageType(c, node.at, requestType, nil, 0)
+		checkMessageType(c, node.at, replyType, nil, 0)
+		return compoundType(c, "callresult", 0, replyType)
+	}
+	requireArity(c, node, values, 5)
+	requireType(c, node, valueAt(values, 0), typedName(c.native, "Supervisor").value.typeID)
+	requireType(c, node, valueAt(values, 1), tString)
+	requireType(c, node, valueAt(values, 4), typedName(c.native, "ChildOptions").value.typeID)
+	handler := checkedType(c, valueAt(values, 2).typeID)
+	state := checkedType(c, head(handler.params).value)
+	if valueAt(values, 2).kind != "func" || handler.kind != "func" || len(handler.params) != 2 || state.kind != "pointer" || handler.result == tVoid {
+		checkFail(c, node.at, "server handler must be a named function taking *State and Request and returning Reply")
+		return tInvalid
+	}
+	request := head(tail(handler.params)).value
+	types := List[int]{state.elem, request, handler.result}
+	if len(explicit) > 3 {
+		checkFail(c, node.at, "too many server type arguments")
+	}
+	for _, id := range explicit {
+		if id != head(types).value {
+			checkFail(c, node.at, "server type argument mismatch")
+		}
+		types = tail(types)
+	}
+	requireType(c, node, valueAt(values, 3), state.elem)
+	checkMessageType(c, node.at, state.elem, nil, 0)
+	checkMessageType(c, node.at, request, nil, 0)
+	checkMessageType(c, node.at, handler.result, nil, 0)
+	return typedName(c.native, "Child").value.typeID
+}

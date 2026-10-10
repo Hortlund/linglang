@@ -133,7 +133,9 @@ func parse(filename string, source string) ParseResult {
 			continue
 		}
 		var decl SyntaxNode
-		if p.current.kind == "func" {
+		if p.current.kind == "import" {
+			decl = parseImport(&p)
+		} else if p.current.kind == "func" {
 			decl = parseFunction(&p)
 		} else {
 			decl = parseDeclaration(&p, false)
@@ -153,4 +155,31 @@ func parse(filename string, source string) ParseResult {
 func parseIdent(p *Parser) SyntaxNode {
 	at := expect(p, "IDENT")
 	return parserSyntax(p, "Ident", at, at.text, nil)
+}
+
+func parseImport(p *Parser) SyntaxNode {
+	at := expect(p, "import")
+	grouped := accept(p, "(")
+	var specs List[SyntaxNode]
+	for p.reason == "" {
+		if grouped && p.current.kind == ")" {
+			break
+		}
+		alias := noSyntax()
+		if p.current.kind == "IDENT" {
+			alias = parseIdent(p)
+		}
+		path := expect(p, "STRING")
+		specs = append(specs, parserSyntax(p, "ImportSpec", path, path.text, List[SyntaxNode]{alias}))
+		if !grouped {
+			break
+		}
+		if p.current.kind != ")" {
+			expect(p, ";")
+		}
+	}
+	if grouped {
+		expect(p, ")")
+	}
+	return parserSyntax(p, "ImportDecl", at, "", specs)
 }

@@ -1,6 +1,6 @@
-# linglang for VS Code
+# Linglang for VS Code
 
-The bean has colours now. Errors too. Those were already there.
+Language support for Linglang, including syntax highlighting and language server integration.
 
 Open `.lang` files for syntax highlighting, comments, bracket pairing, and snippets.
 The bundled language server adds syntax/name/type diagnostics, formatting, and an

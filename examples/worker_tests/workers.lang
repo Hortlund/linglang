@@ -1,0 +1,13 @@
+package main
+
+func increment(n int) int { return n + 1 }
+
+type Ready struct{ pid Pid }
+
+func restartingWorker(parent Pid) {
+	send(parent, Ready{pid: self()})
+	receive[int](-1)
+	panic("simulated worker failure")
+}
+
+func main() { println("increment:", increment(1)) }

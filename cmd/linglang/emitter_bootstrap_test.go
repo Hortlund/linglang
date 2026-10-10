@@ -18,6 +18,11 @@ import (
 func TestBootstrapEmitterPrograms(t *testing.T) {
 	type fixture struct{ name, code, want, failure string }
 	fixtures := []fixture{
+		{"if_initializers", ifInitializerFixture, "if initializers ok\n", ""},
+		{"otp_server_calls", otpServerFixture, otpServerOutput, ""},
+		{"otp_server_result_roots", emitterPointerHelpers + `func makeResult()CallResult[*N]{return CallResult[*N]{value:node(7),ok:true}};func main(){r:=makeResult();p:=&r;_=churn();println(p.value.x,p.ok,p.timedOut,p.reason=="")}`, "7 true false true\n", ""},
+		{"otp_server_bad_timeout", `func main(){call[int](self(),1,-2)}`, "", "linglang_invalid_timeout"},
+		{"otp_server_nil", `func main(){call[int](nil,1,0)}`, "", "linglang_invalid_pid"},
 		{"otp_timers", otpTimerFixture, otpTimerOutput, ""},
 		{"otp_timer_bad_delay", `func main(){sendAfter(self(),1,-1)}`, "", "linglang_invalid_timeout"},
 		{"otp_timer_nil", `func main(){var t Timer;cancelTimer(t)}`, "", "linglang_invalid_timer"},
@@ -123,6 +128,14 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixtures = append(fixtures, fixture{"otp_resilient_worker", strings.TrimPrefix(string(example), "package main"), "Worker failed: simulated worker failure\nOTP restarted worker: true\nCompleted job: 1 hello from BEAM\n", ""})
+	store, err := os.ReadFile("../../examples/store.lang")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtures = append(fixtures, fixture{"otp_server_store", strings.TrimPrefix(string(store), "package main"), otpStoreOutput, ""})
+	for _, example := range bookExamples(t) {
+		fixtures = append(fixtures, fixture{"book_" + example.name, example.source, example.want, ""})
+	}
 	files, err := readSources("../../bootstrap/emitter")
 	if err != nil {
 		t.Fatal(err)
@@ -268,12 +281,12 @@ func TestBootstrapEmitterPackedWithoutGo(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "linglang_program.erl"), []byte(module), 0600); err != nil {
 		t.Fatal(err)
 	}
-	_, stderr, err = invoke(filepath.Join(otp, "erlc"), "-o", dir, filepath.Join(dir, "linglang_rt.erl"), filepath.Join(dir, "linglang_sup.erl"), filepath.Join(dir, "linglang_program.erl"))
+	_, stderr, err = invoke(filepath.Join(otp, "erlc"), "-o", dir, filepath.Join(dir, "linglang_rt.erl"), filepath.Join(dir, "linglang_sup.erl"), filepath.Join(dir, "linglang_server.erl"), filepath.Join(dir, "linglang_io.erl"), filepath.Join(dir, "linglang_program.erl"))
 	if err != nil {
 		t.Fatalf("OTP compilation: %v\n%s", err, stderr)
 	}
 	out, stderr, err := invoke(filepath.Join(otp, "erl"), "-noshell", "-pa", dir, "-eval", evaluationScript(true, true))
-	want := "compiler has entered the chat\n55 beans. all accounted for.\nthis bean has its own scope\nactual answer: 55\nreceipt: 16\n"
+	want := "Bootstrap compiler example\ncalculation verified\nlocal scope\nfibonacci: 55\nflags: 16\n"
 	if err != nil || out != want {
 		t.Fatalf("OTP-only program: %q (%v)\n%s", out, err, stderr)
 	}

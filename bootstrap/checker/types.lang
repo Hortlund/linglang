@@ -78,6 +78,7 @@ type PendingConstant struct {
 }
 
 type Checker struct {
+	nativeNames   List[string]
 	record        bool
 	expressions   Map[string, CheckedValue]
 	definitions   Map[string, CheckedBinding]
@@ -213,10 +214,13 @@ func typeSyntax(c *Checker, scope *TypeScope, node SyntaxNode) int {
 		base := childAt(node, 0)
 		binding := typedName(scope, base.text)
 		if binding.ok && binding.value.kind == "generic" {
-			if (base.text == "List" || base.text == "Delivery") && len(node.children) == 2 {
+			if (base.text == "List" || base.text == "Delivery" || base.text == "CallResult") && len(node.children) == 2 {
 				kind := "list"
 				if base.text == "Delivery" {
 					kind = "delivery"
+				}
+				if base.text == "CallResult" {
+					kind = "callresult"
 				}
 				return compoundType(c, kind, 0, typeSyntax(c, scope, childAt(node, 1)))
 			}
@@ -238,7 +242,15 @@ func fieldType(c *Checker, id int, name string) int {
 	if t.kind == "pointer" {
 		t = checkedType(c, t.elem)
 	}
-	if t.kind == "delivery" {
+	if t.kind == "callresult" {
+		if name == "timedOut" {
+			return tBool
+		}
+		if name == "reason" {
+			return tString
+		}
+	}
+	if t.kind == "delivery" || t.kind == "callresult" {
 		if name == "value" {
 			return t.elem
 		}

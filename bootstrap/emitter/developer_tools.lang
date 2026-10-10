@@ -1,0 +1,166 @@
+package main
+
+type FormatInput struct {
+	path      string
+	source    string
+	formatted string
+}
+
+func developerFailure(path string, reason string) { panic(path + ": " + reason) }
+
+// Recursive discovery skips build outputs and encountered symlinks. Explicit
+// symlinks resolve to their target; the replacement never destroys the link.
+func formatFiles(paths List[string]) List[string] {
+	var found Map[string, bool]
+	var files List[string]
+	for head(paths).ok {
+		path := head(paths).value
+		paths = tail(paths)
+		resolved := canonicalPath(path)
+		if !resolved.ok {
+			developerFailure(path, resolved.reason)
+		}
+		path = resolved.value
+		if get(found, path).ok {
+			continue
+		}
+		found = put(found, path, true)
+		info := pathInfo(path)
+		if !info.ok {
+			developerFailure(path, info.reason)
+		}
+		if info.kind == "directory" {
+			entries := readDirectory(path)
+			if !entries.ok {
+				developerFailure(path, entries.reason)
+			}
+			for _, name := range entries.value {
+				child := path + "/" + name
+				entry := pathInfo(child)
+				if !entry.ok {
+					developerFailure(child, entry.reason)
+				}
+				if entry.kind == "directory" {
+					if name != ".git" && name != "_build" && name != "_release" && name != "bin" && name != "dist" {
+						paths = prepend(child, paths)
+					}
+				} else if entry.kind != "symlink" && textEnds(name, ".lang") {
+					paths = prepend(child, paths)
+				}
+			}
+		} else if info.kind == "regular" {
+			files = append(files, path)
+		} else {
+			developerFailure(path, "formatting requires a regular file")
+		}
+	}
+	// Deterministic output even when directory traversal or input order differs.
+	var sorted List[string]
+	for _, path := range files {
+		var prefix List[string]
+		rest := sorted
+		for head(rest).ok && head(rest).value < path {
+			prefix = prepend(head(rest).value, prefix)
+			rest = tail(rest)
+		}
+		sorted = prepend(path, rest)
+		for _, previous := range prefix {
+			sorted = prepend(previous, sorted)
+		}
+	}
+	return sorted
+}
+
+func bootstrapFormat(values List[string]) {
+	check := false
+	var paths List[string]
+	for _, value := range values {
+		if value == "--check" {
+			check = true
+		} else {
+			if value == "" || byteAt(value, 0) == 45 {
+				panic("fmt accepts --check and file/directory paths")
+			}
+			paths = append(paths, value)
+		}
+	}
+	if !head(paths).ok {
+		paths = List[string]{"."}
+	}
+	files := formatFiles(paths)
+	if !head(files).ok {
+		panic("no .lang files found")
+	}
+	var changes List[FormatInput]
+	for _, path := range files {
+		input := readFile(path)
+		if !input.ok {
+			developerFailure(path, input.reason)
+		}
+		formatted := formatSourceText(path, input.value)
+		if !formatted.ok {
+			panic(formatted.reason)
+		}
+		if formatted.value != input.value {
+			changes = append(changes, FormatInput{path: path, source: input.value, formatted: formatted.value})
+		}
+	}
+	for _, change := range changes {
+		if !check {
+			saved := replaceFile(change.path, change.source, change.formatted)
+			if !saved.ok {
+				developerFailure(change.path, saved.reason)
+			}
+		}
+		println(change.path)
+	}
+	if check && head(changes).ok {
+		panic(formatInt(len(changes)) + " source files need formatting")
+	}
+}
+
+func bootstrapInit(values List[string]) {
+	if len(values) > 1 {
+		panic("init expects at most one directory")
+	}
+	path := "."
+	if head(values).ok {
+		path = head(values).value
+	}
+	if path == "" || byteAt(path, 0) == 45 {
+		panic("init expects a directory (use ./ for names starting with a dash)")
+	}
+	// A trailing slash makes lstat follow a directory symlink on POSIX.
+	for len(path) > 1 && textEnds(path, "/") {
+		path = slice(path, 0, len(path)-1)
+	}
+	info := pathInfo(path)
+	if !info.ok {
+		if info.reason != "enoent" {
+			developerFailure(path, info.reason)
+		}
+		created := makeDirectories(path)
+		if !created.ok {
+			developerFailure(path, created.reason)
+		}
+		info = pathInfo(path)
+	}
+	if !info.ok || info.kind != "directory" {
+		developerFailure(path, "init requires a directory, not a file or symlink")
+	}
+	entries := readDirectory(path)
+	if !entries.ok {
+		developerFailure(path, entries.reason)
+	}
+	if head(entries.value).ok {
+		developerFailure(path, "init requires an empty directory")
+	}
+	for _, file := range projectFiles() {
+		saved := writeNewFile(path+"/"+file.name, file.text)
+		if !saved.ok {
+			developerFailure(path+"/"+file.name, saved.reason)
+		}
+	}
+	println("Created Linglang project in " + path)
+	println("See README.md in that directory for run, test, and packaging commands.")
+}

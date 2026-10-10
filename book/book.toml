@@ -1,0 +1,18 @@
+[book]
+title = "The Linglang Book"
+authors = ["Linglang contributors"]
+language = "en"
+src = "src"
+description = "Learn imperative programming on BEAM, then explore the language contract and compiler architecture."
+
+[build]
+build-dir = "../_build/book"
+create-missing = false
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+smart-punctuation = true
+
+[output.html.playground]
+runnable = false

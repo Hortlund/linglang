@@ -9,20 +9,23 @@ type BootstrapOptions struct {
 	stats     bool
 	help      bool
 	noOpt     bool
+	timeout   int
+	json      bool
+	tests     bool
 }
 
 func bootstrapUsage() string {
-	return "usage: linglang-bootstrap <check|emit|build|run> [options] <source.lang|directory>...\n  compiler: --no-opt (original cell lowering)\n  build: -o <executable> (default: program.escript)\n  build/run: --gc-stress --gc-stats\n  run: -- <program arguments>\n  source paths without a command retain legacy emit behavior"
+	return "usage: linglang-bootstrap <check|emit|build|run|test|fmt|init|describe|deps> [options] <source.lang|directory>...\n  describe: [--json]\n  deps: [--check] [--json] [file|directory]\n  fmt: [--check] [file|directory ...]\n  init: [directory]\n  check/test: --json (structured output)\n  check: --tests (validate test/library roots)\n  compiler: --no-opt (original cell lowering)\n  build: -o <executable> (default: program.escript)\n  build/run/test: --gc-stress --gc-stats\n  test: --timeout <positive milliseconds or Ns/Nms> (default: 30s)\n  run: -- <program arguments>\n  source paths without a command retain legacy emit behavior"
 }
 
 func bootstrapOptions(values List[string]) BootstrapOptions {
-	options := BootstrapOptions{command: "emit", output: "program.escript"}
+	options := BootstrapOptions{command: "emit", output: "program.escript", timeout: 30000}
 	first := head(values).value
 	if first == "--help" || first == "-h" {
 		options.help = true
 		return options
 	}
-	if first == "check" || first == "emit" || first == "build" || first == "run" {
+	if first == "check" || first == "emit" || first == "build" || first == "run" || first == "test" {
 		options.command = first
 		values = tail(values)
 	}
@@ -36,7 +39,23 @@ func bootstrapOptions(values List[string]) BootstrapOptions {
 			options.arguments = values
 			break
 		}
-		if value == "--no-opt" {
+		if value == "--timeout" {
+			if options.command != "test" || !head(values).ok {
+				panic("--timeout requires test and a duration")
+			}
+			options.timeout = bootstrapTestTimeout(head(values).value)
+			values = tail(values)
+		} else if value == "--json" {
+			if options.command != "check" && options.command != "test" {
+				panic("--json requires check or test")
+			}
+			options.json = true
+		} else if value == "--tests" {
+			if options.command != "check" {
+				panic("--tests requires check")
+			}
+			options.tests = true
+		} else if value == "--no-opt" {
 			options.noOpt = true
 		} else if value == "-o" {
 			if options.command != "build" || !head(values).ok || head(values).value == "" {
@@ -45,8 +64,8 @@ func bootstrapOptions(values List[string]) BootstrapOptions {
 			options.output = head(values).value
 			values = tail(values)
 		} else if value == "--gc-stress" || value == "--gc-stats" {
-			if options.command != "build" && options.command != "run" {
-				panic("GC options require build or run")
+			if options.command != "build" && options.command != "run" && options.command != "test" {
+				panic("GC options require build, run, or test")
 			}
 			if value == "--gc-stress" {
 				options.stress = true
@@ -60,57 +79,93 @@ func bootstrapOptions(values List[string]) BootstrapOptions {
 			options.paths = append(options.paths, value)
 		}
 	}
+	if !head(options.paths).ok && options.command == "test" {
+		options.paths = List[string]{"."}
+	}
 	if !head(options.paths).ok {
 		panic(bootstrapUsage())
+	}
+	if (options.command == "test" || options.tests) && len(options.paths) != 1 {
+		panic("test and check --tests expect one source file or directory")
 	}
 	return options
 }
 
-func bootstrapParse(filenames List[string]) List[SyntaxNode] {
+func bootstrapParse(filenames List[string]) ToolFiles {
 	var reversed List[SyntaxNode]
 	var seen Map[string, bool]
 	for _, filename := range filenames {
 		if get(seen, filename).ok {
-			panic("duplicate source file " + filename)
+			return ToolFiles{issue: ToolIssue{code: "LL1002", reason: "duplicate source file " + filename}}
 		}
 		seen = put(seen, filename, true)
 		input := readFile(filename)
 		if !input.ok {
-			panic("cannot read " + filename + ": " + input.reason)
+			return ToolFiles{issue: ToolIssue{code: "LL1000", reason: "cannot read " + filename + ": " + input.reason}}
 		}
 		parsed := parse(filename, input.value)
 		if !parsed.ok {
-			panic(filename + ":" + formatInt(parsed.line) + ":" + formatInt(parsed.column) + ": " + parsed.reason)
+			return ToolFiles{issue: ToolIssue{code: "LL1001", reason: parsed.reason, at: Token{filename: filename, offset: parsed.offset, line: parsed.line, column: parsed.column}}}
 		}
 		reversed = prepend(parsed.root, reversed)
 	}
-	return syntaxOrder(reversed)
+	return ToolFiles{files: syntaxOrder(reversed)}
 }
 
 func main() {
+	values := args()
+	if head(values).value == "describe" {
+		bootstrapDescribe(tail(values))
+		return
+	}
+	if head(values).value == "deps" {
+		bootstrapDeps(tail(values))
+		return
+	}
+	if head(values).value == "fmt" {
+		bootstrapFormat(tail(values))
+		return
+	}
+	if head(values).value == "init" {
+		bootstrapInit(tail(values))
+		return
+	}
 	options := bootstrapOptions(args())
 	if options.help {
 		println(bootstrapUsage())
 		return
 	}
-	filenames := sourceFiles(options.paths)
-	if !filenames.ok {
-		panic(filenames.reason)
+	if options.command == "test" {
+		bootstrapTest(options)
+		return
 	}
-	files := bootstrapParse(filenames.value)
-	result := emitPackageWithOptions(files, options.noOpt)
+	loaded := toolLoad(options)
+	if loaded.issue.code != "" {
+		toolFailure(options, loaded.count, loaded.issue)
+		return
+	}
+	files := loaded.files
+	result := emitPackageMode(files, options.noOpt, options.tests)
 	if !result.ok {
-		panic(result.at.filename + ":" + formatInt(result.at.line) + ":" + formatInt(result.at.column) + ": " + result.reason)
+		toolFailure(options, loaded.count, ToolIssue{code: result.code, reason: result.reason, at: result.at})
+		return
 	}
 	// Check the same supported program subset as build/run, including return
 	// flow and entry-point validation, while withholding the emitted module.
 	if options.command == "check" {
+		if options.json {
+			toolReport(toolCheckJSON(options, loaded.count, ToolIssue{}), true)
+		}
 		return
 	}
 	if options.command == "emit" {
 		print(result.module)
 	} else if options.command == "build" {
-		built := buildProgram(result.module, options.output, filenames.value, options.stress, options.stats)
+		var inputs List[string]
+		for _, file := range files {
+			inputs = append(inputs, file.at.filename)
+		}
+		built := buildProgram(result.module, options.output, inputs, options.stress, options.stats)
 		if !built.ok {
 			panic(built.reason)
 		}

@@ -27,7 +27,7 @@ func pack(path, program string, gcStress, gcStats bool) error {
 	}
 	var archive bytes.Buffer
 	writer := zip.NewWriter(&archive)
-	for _, name := range []string{"linglang_cli.beam", "linglang_program.beam", "linglang_rt.beam", "linglang_sup.beam"} {
+	for _, name := range []string{"linglang_cli.beam", "linglang_program.beam", "linglang_rt.beam", "linglang_sup.beam", "linglang_server.beam", "linglang_io.beam"} {
 		beam, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			return err

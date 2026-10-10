@@ -1,0 +1,134 @@
+package main
+
+// Driver results remain data until the CLI chooses text or JSON rendering.
+type ToolIssue struct {
+	code    string
+	reason  string
+	at      Token
+	related List[Token]
+}
+
+type ToolFiles struct {
+	files List[SyntaxNode]
+	issue ToolIssue
+	count int
+}
+
+func toolQuote(text string) string {
+	var parts List[string]
+	parts = prepend("\"", parts)
+	digits := "0123456789abcdef"
+	for i := 0; i < len(text); {
+		b := byteAt(text, i)
+		part := ""
+		width := 1
+		if b == 34 {
+			part = "\\\""
+		} else if b == 92 {
+			part = "\\\\"
+		} else if b < 32 {
+			part = "\\u00" + slice(digits, b/16, b/16+1) + slice(digits, b%16, b%16+1)
+		} else {
+			r := runeAt(text, i)
+			if r.ok {
+				width = r.width
+				part = slice(text, i, i+width)
+			} else {
+				part = "\\ufffd"
+			}
+		}
+		parts = prepend(part, parts)
+		i += width
+	}
+	parts = prepend("\"", parts)
+	var ordered List[string]
+	for _, part := range parts {
+		ordered = prepend(part, ordered)
+	}
+	return join(ordered, "")
+}
+
+func toolBool(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
+}
+
+func toolLocation(at Token) string {
+	if at.line == 0 {
+		return "null"
+	}
+	return "{\"file\":" + toolQuote(at.filename) + ",\"offset\":" + formatInt(at.offset) + ",\"line\":" + formatInt(at.line) + ",\"column\":" + formatInt(at.column) + "}"
+}
+
+func toolIssueJSON(issue ToolIssue) string {
+	var related List[string]
+	for _, at := range issue.related {
+		related = append(related, "{\"message\":\"imported here\",\"location\":"+toolLocation(at)+"}")
+	}
+	return "{\"code\":" + toolQuote(issue.code) + ",\"severity\":\"error\",\"message\":" + toolQuote(issue.reason) + ",\"location\":" + toolLocation(issue.at) + ",\"related\":[" + join(related, ",") + "]}"
+}
+
+func toolCheckJSON(options BootstrapOptions, count int, issue ToolIssue) string {
+	mode := "program"
+	if options.tests {
+		mode = "tests"
+	}
+	diagnostics := ""
+	if issue.code != "" {
+		diagnostics = toolIssueJSON(issue)
+	}
+	return "{\"schemaVersion\":1,\"command\":\"check\",\"compiler\":\"bootstrap\",\"mode\":" + toolQuote(mode) + ",\"ok\":" + toolBool(issue.code == "") + ",\"sourceFiles\":" + formatInt(count) + ",\"diagnostics\":[" + diagnostics + "]}"
+}
+
+func toolEvent(event string) string {
+	return "{\"schemaVersion\":1,\"command\":\"test\",\"compiler\":\"bootstrap\",\"event\":" + toolQuote(event)
+}
+
+func toolTestEvent(event string, test BootstrapTest) string {
+	return toolEvent(event) + ",\"name\":" + toolQuote(test.name) + ",\"location\":" + toolLocation(test.at)
+}
+
+func toolSuiteEnd(total int, passed int, failed int, ok bool) string {
+	return toolEvent("suite_end") + ",\"total\":" + formatInt(total) + ",\"passed\":" + formatInt(passed) + ",\"failed\":" + formatInt(failed) + ",\"ok\":" + toolBool(ok) + "}"
+}
+
+func toolFailure(options BootstrapOptions, count int, issue ToolIssue) {
+	if options.json {
+		if options.command == "test" {
+			println(toolEvent("diagnostic") + ",\"diagnostic\":" + toolIssueJSON(issue) + "}")
+			toolReport(toolSuiteEnd(0, 0, 0, false), false)
+		} else {
+			toolReport(toolCheckJSON(options, count, issue), false)
+		}
+		return
+	}
+	if issue.at.line > 0 {
+		panic(issue.at.filename + ":" + formatInt(issue.at.line) + ":" + formatInt(issue.at.column) + ": " + issue.reason)
+	}
+	panic(issue.reason)
+}
+
+func toolLoad(options BootstrapOptions) ToolFiles {
+	var filenames FilesResult
+	library := options.tests || options.command == "test"
+	if library {
+		filenames = testFiles(options.paths)
+	} else {
+		filenames = sourceFiles(options.paths)
+	}
+	if !filenames.ok {
+		return ToolFiles{issue: ToolIssue{code: "LL1000", reason: filenames.reason}}
+	}
+	parsed := bootstrapParse(filenames.value)
+	if parsed.issue.code != "" {
+		if parsed.issue.code != "LL1000" {
+			parsed.count = len(filenames.value)
+		}
+		return parsed
+	}
+	linked := bootstrapLinkMode(parsed.files, library)
+	linked.count = len(filenames.value)
+	return linked
+}

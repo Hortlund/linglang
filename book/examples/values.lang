@@ -1,0 +1,15 @@
+package main
+
+func main() {
+	total := 0
+	for i := 0; i < 4; i++ {
+		total += i
+	}
+	if next := total + 1; next > 5 {
+		println(next)
+	}
+	// next is out of scope here. total still contains 6.
+	pointer := &total
+	*pointer += 10
+	println(total)
+}

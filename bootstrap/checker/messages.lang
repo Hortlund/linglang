@@ -5,6 +5,11 @@ package main
 func nativeMessageType(c *Checker, node SyntaxNode, name string, explicit List[int], values List[CheckedValue]) int {
 	id := tInvalid
 	switch name {
+	case "call":
+		id = defaultType(valueAt(values, 1).typeID)
+		if len(explicit) == 2 {
+			id = head(tail(explicit)).value
+		}
 	case "receive":
 		id = head(explicit).value
 	case "send", "sendAfter":
@@ -51,7 +56,7 @@ func checkMessageType(c *Checker, at Token, id int, active Map[int, bool], depth
 		}
 	case "pointer":
 		checkFail(c, at, "process-local pointers cannot cross a process boundary")
-	case "list", "delivery":
+	case "list", "delivery", "callresult":
 		checkMessageType(c, at, t.elem, active, depth+1)
 	case "map":
 		checkMessageType(c, at, t.key, active, depth+1)

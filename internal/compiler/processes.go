@@ -15,15 +15,19 @@ type Pid chan int
 type Monitor chan bool
 type Supervisor chan string
 type Timer chan int
+type Socket chan int
 type Process struct { pid Pid; monitor Monitor }
 type ChildOptions struct { restart string; shutdownMillis int }
 type Child struct { pid Pid; ok bool; reason string }
 type Delivery[T any] struct { value T; ok bool }
+type CallResult[T any] struct { value T; ok bool; timedOut bool; reason string }
 type Exit struct { pid Pid; ok bool; normal bool; reason string }
 type List[T any] []T
 func prepend[T any](value T, items List[T]) List[T] { return nil }
 func head[T any](items List[T]) Delivery[T] { return Delivery[T]{} }
 func tail[T any](items List[T]) List[T] { return nil }
+func call[R, Q any](pid Pid, request Q, timeout int) CallResult[R] { return CallResult[R]{} }
+func superviseServer[S, Q, R any](supervisor Supervisor, name string, handler func(*S, Q) R, initial S, options ChildOptions) Child { return Child{} }
 func self() Pid { return nil }
 func spawn[T any](worker func(T), args T) Pid { return nil }
 func spawnMonitor[T any](worker func(T), args T) Process { return Process{} }
@@ -88,7 +92,7 @@ func (c *compiler) processType(t types.Type, name string) bool {
 }
 
 func (c *compiler) opaqueProcessType(t types.Type) bool {
-	return c.processType(t, "Pid") || c.processType(t, "Monitor") || c.processType(t, "Supervisor") || c.processType(t, "Timer")
+	return c.processType(t, "Pid") || c.processType(t, "Monitor") || c.processType(t, "Supervisor") || c.processType(t, "Timer") || c.processType(t, "Socket")
 }
 
 // The schema is both the selective-receive tag and a runtime validator. Named
@@ -127,6 +131,9 @@ func (c *compiler) messageSchemaSeen(t types.Type, seen map[types.Type]bool) (st
 	}
 	if c.processType(t, "Pid") {
 		return "pid", nil
+	}
+	if c.processType(t, "Socket") {
+		return "", fmt.Errorf("socket handles belong to their creating process")
 	}
 	if c.processType(t, "Monitor") {
 		return "", fmt.Errorf("monitor handles belong to their creating process")
@@ -182,6 +189,10 @@ func (c *compiler) processCall(call *ast.CallExpr) (string, bool, error) {
 	}
 	if name == "prepend" || name == "head" || name == "tail" {
 		code, err := c.listIntrinsic(call, name)
+		return code, true, err
+	}
+	if name == "call" || name == "superviseServer" {
+		code, err := c.serverCall(call, name)
 		return code, true, err
 	}
 	sig := c.info.TypeOf(call.Fun).(*types.Signature)

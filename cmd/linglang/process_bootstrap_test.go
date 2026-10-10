@@ -146,3 +146,46 @@ func assertMessageSchemas(t *testing.T, seed, module string) {
 		t.Fatalf("checked %d schemas, want 11", count)
 	}
 }
+
+const otpServerFixture = `
+type Query struct{n int;block bool}
+func handler(state *int,q Query)int{if q.block{receive[bool](-1)};*state+=q.n;return *state}
+func listHandler(state *List[int],q List[int])List[int]{*state=q;return *state}
+func target(p Pid)Pid{print(1);return p}
+func query()Query{print(2);return Query{n:3}}
+func deadline()int{print(3);return 5000}
+func use(p *int,r CallResult[int]){println(*p,r.value)}
+func main(){
+ s:=startSupervisor(3,5)
+ p:=superviseServer(s,"server",handler,10,ChildOptions{}).pid
+ send(self(),123)
+ r:=call[int](p,Query{n:1,block:true},0)
+ assert(!r.ok&&r.timedOut&&r.reason=="timeout"&&r.value==0)
+ send(p,true)
+ r=call[int](p,Query{n:2},5000)
+ assert(r.ok&&!r.timedOut&&r.reason==""&&r.value==13)
+ assert(receive[int](0).value==123)
+ assert(call[string](p,Query{},5000).reason=="protocol_mismatch")
+ r=call[int](p,"wrong request",5000)
+ assert(r.reason=="protocol_mismatch")
+ assert(call[int](self(),0,0).reason=="calling_self")
+ n:=42
+ use(&n,(call[int,Query])(target(p),query(),deadline()))
+ var zero CallResult[List[int]]
+ assert(zero.value==nil&&!zero.ok&&!zero.timedOut&&zero.reason=="")
+ zero=CallResult[List[int]]{value:List[int]{1,2},ok:true,reason:"record"}
+ send(self(),zero)
+ assert(receive[CallResult[List[int]]](0).value.reason=="record")
+ lp:=(superviseServer[List[int],List[int],List[int]])(s,"list",listHandler,nil,ChildOptions{}).pid
+ zero=call[List[int],List[int]](lp,nil,5000)
+ assert(zero.ok&&zero.value==nil)
+ zero=call[List[int]](lp,List[int]{4,5},5000)
+ assert(zero.ok&&len(zero.value)==2)
+ assert(stopSupervisor(s))
+ r=call[int](p,Query{},5000)
+ assert(!r.ok&&!r.timedOut&&r.reason=="noproc")
+ println("server calls ok")
+}`
+
+const otpServerOutput = "12342 16\nserver calls ok\n"
+const otpStoreOutput = "Greeting: hello from BEAM\nConcurrent clients completed: 4\nCall failed: store crashed\nOTP restarted store: true\nPrevious client data survived: false\nRestored greeting: hello from BEAM\n"

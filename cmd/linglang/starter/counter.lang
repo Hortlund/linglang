@@ -1,0 +1,7 @@
+package main
+
+// Each request runs inside one supervised OTP server process.
+func add(state *int, amount int) int {
+	*state += amount
+	return *state
+}

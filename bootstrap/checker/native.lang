@@ -1,25 +1,49 @@
 package main
 
 func nativeFunction(c *Checker, scope *TypeScope, name string, params List[int], result int) {
+	c.nativeNames = append(c.nativeNames, name)
 	bindType(scope, name, "native", addType(c, CheckedType{kind: "func", name: name, params: params, result: result}))
 }
 
 func nativeTypes(c *Checker, scope *TypeScope) {
-	for _, name := range (List[string]{"Pid", "Monitor", "Supervisor", "Timer"}) {
+	for _, name := range (List[string]{"Pid", "Monitor", "Supervisor", "Timer", "Socket"}) {
+		c.nativeNames = append(c.nativeNames, name)
 		bindType(scope, name, "type", addType(c, CheckedType{kind: "handle", name: name}))
 	}
-	for _, name := range (List[string]{"List", "Map", "Delivery"}) {
+	for _, name := range (List[string]{"List", "Map", "Delivery", "CallResult"}) {
+		c.nativeNames = append(c.nativeNames, name)
 		bindType(scope, name, "generic", tInvalid)
 	}
 	// Native records use exactly the same struct checker as user declarations.
-	parsed := parse("<native>", "package main\ntype Process struct { pid Pid; monitor Monitor }; type ChildOptions struct { restart string; shutdownMillis int }; type Child struct { pid Pid; ok bool; reason string }; type Exit struct { pid Pid; ok bool; normal bool; reason string }; type TextResult struct { value string; ok bool; reason string }; type IntResult struct { value int; ok bool; reason string }; type IOResult struct { ok bool; reason string }; type RuneResult struct { value int; width int; ok bool }; type FilesResult struct { value List[string]; ok bool; reason string }")
+	parsed := parse("<native>", "package main\ntype PathInfo struct { kind string; ok bool; reason string }; type TestRunResult struct { ok bool; timedOut bool; reason string }; type SocketResult struct { value Socket; ok bool; reason string }; type SQLValue struct { kind string; value string }; type SQLResult struct { columns List[string]; rows List[List[SQLValue]]; changes int; ok bool; reason string }; type Process struct { pid Pid; monitor Monitor }; type ChildOptions struct { restart string; shutdownMillis int }; type Child struct { pid Pid; ok bool; reason string }; type Exit struct { pid Pid; ok bool; normal bool; reason string }; type TextResult struct { value string; ok bool; reason string }; type IntResult struct { value int; ok bool; reason string }; type IOResult struct { ok bool; reason string }; type RuneResult struct { value int; width int; ok bool }; type FilesResult struct { value List[string]; ok bool; reason string }")
 	assert(parsed.ok)
+	for _, decl := range tail(parsed.root.children) {
+		for _, spec := range decl.children {
+			c.nativeNames = append(c.nativeNames, childAt(spec, 0).text)
+		}
+	}
 	registerTypes(c, scope, tail(parsed.root.children))
 	completeTypes(c, scope, tail(parsed.root.children))
 }
 
 func nativeFunctions(c *Checker, scope *TypeScope) {
+	nativeFunction(c, scope, "sha256", List[int]{tString}, tString)
 	pid := typedName(scope, "Pid").value.typeID
+	nativeFunction(c, scope, "pathInfo", List[int]{tString}, typedName(scope, "PathInfo").value.typeID)
+	nativeFunction(c, scope, "readDirectory", List[int]{tString}, typedName(scope, "FilesResult").value.typeID)
+	nativeFunction(c, scope, "canonicalPath", List[int]{tString}, typedName(scope, "TextResult").value.typeID)
+	nativeFunction(c, scope, "makeDirectories", List[int]{tString}, typedName(scope, "IOResult").value.typeID)
+	nativeFunction(c, scope, "writeNewFile", List[int]{tString, tString}, typedName(scope, "IOResult").value.typeID)
+	nativeFunction(c, scope, "replaceFile", List[int]{tString, tString, tString}, typedName(scope, "IOResult").value.typeID)
+	socketType := typedName(scope, "Socket").value.typeID
+	nativeFunction(c, scope, "tcpListen", List[int]{tString, tInt}, typedName(scope, "SocketResult").value.typeID)
+	nativeFunction(c, scope, "tcpConnect", List[int]{tString, tInt, tInt}, typedName(scope, "SocketResult").value.typeID)
+	nativeFunction(c, scope, "tcpAccept", List[int]{socketType, tInt}, typedName(scope, "SocketResult").value.typeID)
+	nativeFunction(c, scope, "tcpPort", List[int]{socketType}, typedName(scope, "IntResult").value.typeID)
+	nativeFunction(c, scope, "tcpRead", List[int]{socketType, tInt, tInt}, typedName(scope, "TextResult").value.typeID)
+	nativeFunction(c, scope, "tcpWrite", List[int]{socketType, tString, tInt}, typedName(scope, "IOResult").value.typeID)
+	nativeFunction(c, scope, "tcpClose", List[int]{socketType}, tBool)
+	nativeFunction(c, scope, "sqliteQuery", List[int]{tString, tString, compoundType(c, "list", 0, typedName(scope, "SQLValue").value.typeID), tInt}, typedName(scope, "SQLResult").value.typeID)
 	monitorType := typedName(scope, "Monitor").value.typeID
 	supervisor := typedName(scope, "Supervisor").value.typeID
 	child := typedName(scope, "Child").value.typeID
@@ -41,6 +65,13 @@ func nativeFunctions(c *Checker, scope *TypeScope) {
 	nativeFunction(c, scope, "writeFile", List[int]{tString, tString}, typedName(scope, "IOResult").value.typeID)
 	stringsType := compoundType(c, "list", 0, tString)
 	ioType := typedName(scope, "IOResult").value.typeID
+	nativeFunction(c, scope, "monotonicMillis", List[int]{}, tInt)
+	nativeFunction(c, scope, "modulePath", List[int]{tString, tString}, tString)
+	nativeFunction(c, scope, "testFiles", List[int]{stringsType}, typedName(scope, "FilesResult").value.typeID)
+	nativeFunction(c, scope, "toolReport", List[int]{tString, tBool}, tVoid)
+	nativeFunction(c, scope, "runTestProgramResult", List[int]{tString, stringsType, tBool, tBool, tInt, tBool}, typedName(scope, "TestRunResult").value.typeID)
+	nativeFunction(c, scope, "runTestProgram", List[int]{tString, stringsType, tBool, tBool, tInt}, ioType)
+	nativeFunction(c, scope, "moduleFiles", List[int]{tString}, typedName(scope, "FilesResult").value.typeID)
 	nativeFunction(c, scope, "sourceFiles", List[int]{stringsType}, typedName(scope, "FilesResult").value.typeID)
 	nativeFunction(c, scope, "buildProgram", List[int]{tString, tString, stringsType, tBool, tBool}, ioType)
 	nativeFunction(c, scope, "runProgram", List[int]{tString, stringsType, tBool, tBool}, ioType)
@@ -57,7 +88,8 @@ func nativeFunctions(c *Checker, scope *TypeScope) {
 	for _, name := range (List[string]{"isLetter", "isDigit"}) {
 		nativeFunction(c, scope, name, List[int]{tInt}, tBool)
 	}
-	for _, name := range (List[string]{"prepend", "head", "tail", "get", "put", "remove", "receive", "send", "sendAfter", "spawn", "spawnMonitor", "supervise"}) {
+	for _, name := range (List[string]{"prepend", "head", "tail", "get", "put", "remove", "receive", "send", "sendAfter", "spawn", "spawnMonitor", "supervise", "call", "superviseServer"}) {
+		c.nativeNames = append(c.nativeNames, name)
 		bindType(scope, name, "intrinsic", tInvalid)
 	}
 	for _, name := range (List[string]{"len", "append", "make", "new", "panic", "print", "println"}) {
@@ -95,6 +127,9 @@ func inferredValueType(c *Checker, node SyntaxNode, value CheckedValue) int {
 }
 
 func nativeCall(c *Checker, scope *TypeScope, node SyntaxNode, name string, explicit List[int], values List[CheckedValue]) int {
+	if name == "call" || name == "superviseServer" {
+		return nativeServerCall(c, node, name, explicit, values)
+	}
 	if name == "new" || name == "make" {
 		value := valueAt(values, 0)
 		if value.kind != "type" {

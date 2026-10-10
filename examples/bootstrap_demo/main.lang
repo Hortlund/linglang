@@ -1,22 +1,22 @@
 package main
 
-const title = "compiler has entered the chat"
+const title = "Bootstrap compiler example"
 
 func main() {
 	println(title)
-	beans := fibonacci(10)
+	result := fibonacci(10)
 	flags := 13
 	flags &^= 5
 	flags <<= 1
-	if beans == 55 && flags == 16 {
-		println("55 beans. all accounted for.")
+	if result == 55 && flags == 16 {
+		println("calculation verified")
 	} else {
-		panic("the compiler ate the beans")
+		panic("unexpected calculation result")
 	}
 	{
-		beans := "this bean has its own scope"
-		println(beans)
+		result := "local scope"
+		println(result)
 	}
-	println("actual answer:", beans)
-	println("receipt: " + formatInt(flags))
+	println("fibonacci:", result)
+	println("flags: " + formatInt(flags))
 }

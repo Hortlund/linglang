@@ -25,9 +25,13 @@ test('grammar highlights real language constructs and preserves string/comment s
     return result.tokens.find(token => token.startIndex <= start && token.endIndex > start).scopes;
   }
   assert.ok(scopes('func 雪(x int) {', '雪').includes('entity.name.function.linglang'));
-  assert.ok(scopes('type Bean struct { n int }', 'Bean').includes('entity.name.type.linglang'));
+  assert.ok(scopes('type Record struct { n int }', 'Record').includes('entity.name.type.linglang'));
   assert.ok(scopes('xs := List[int]{0x_FF}', 'List').includes('support.type.linglang'));
   assert.ok(scopes('println(xs)', 'println').includes('support.function.builtin.linglang'));
+  for (const name of ['sourceFiles', 'buildProgram', 'runProgram']) {
+    assert.ok(scopes(`${name}()`, name).includes('support.function.builtin.linglang'), name);
+  }
+  assert.ok(scopes('var files FilesResult', 'FilesResult').includes('support.type.linglang'));
   assert.ok(scopes('n := 0b_101', '0b_101').includes('constant.numeric.integer.linglang'));
   assert.ok(scopes('// println(List[int]{1})', 'println').includes('comment.line.double-slash.linglang'));
   assert.ok(scopes('s := "println\\\"List"', 'println').includes('string.quoted.double.linglang'));
@@ -38,13 +42,20 @@ test('grammar highlights real language constructs and preserves string/comment s
   registry.dispose();
 });
 
-test('builtin highlighting stays synchronized with compiler prelude', () => {
+test('builtin function and type highlighting stays synchronized with compiler prelude', () => {
   const repo = path.resolve(root, '../..');
   const declarations = ['processes.go', 'standard.go', 'maps.go'].map(name => {
     const source = fs.readFileSync(path.join(repo, 'internal/compiler', name), 'utf8');
     return source.match(/const \w+Prelude = `([^`]+)`/)[1];
   }).join('\n');
   const pattern = new RegExp(grammar.repository.builtins.patterns[0].match);
-  for (const match of declarations.matchAll(/^func (\w+)(?:\[|\()/gm)) assert.ok(pattern.test(match[1]), match[1]);
+  for (const match of declarations.matchAll(/^func (\w+)(?:\[|\()/gm)) {
+    assert.ok(pattern.test(match[1]), `Missing builtin function highlighting: ${match[1]}`);
+  }
+  const typePattern = new RegExp(grammar.repository.types.patterns[0].match);
+  // Some result types share a line, separated by semicolons.
+  for (const match of declarations.matchAll(/(?:^|;\s*)type (\w+)(?:\[|\s)/gm)) {
+    assert.ok(typePattern.test(match[1]), `Missing builtin type highlighting: ${match[1]}`);
+  }
   for (const name of ['callIdentifier', 'PreludeSource', 'supportedMapKey']) assert.ok(!pattern.test(name), name);
 });

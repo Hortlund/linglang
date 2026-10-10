@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/constant"
-	"go/parser"
 	"go/token"
 	"go/types"
 	"sort"
@@ -21,9 +20,15 @@ var Runtime string
 //go:embed supervision.erl
 var SupervisionRuntime string
 
+//go:embed server.erl
+var ServerRuntime string
+
+//go:embed io.erl
+var IORuntime string
+
 // RuntimeSources returns a fresh file set for CLI, tests, and benchmark builds.
 func RuntimeSources() map[string]string {
-	return map[string]string{"linglang_rt.erl": Runtime, "linglang_sup.erl": SupervisionRuntime}
+	return map[string]string{"linglang_rt.erl": Runtime, "linglang_sup.erl": SupervisionRuntime, "linglang_server.erl": ServerRuntime, "linglang_io.erl": IORuntime}
 }
 
 type compiler struct {
@@ -77,6 +82,8 @@ type TestCase struct {
 	Name     string
 	Filename string
 	Line     int
+	Column   int
+	Offset   int
 }
 
 // CompileTestFilesWithOptions accepts packages without main and exports a test
@@ -89,29 +96,16 @@ func CompileTestFilesWithOptions(sources []SourceFile, options Options) (string,
 
 func compileFiles(sources []SourceFile, options Options, tests *[]TestCase) (string, error) {
 	if len(sources) == 0 {
-		return "", fmt.Errorf("no source files provided")
+		return "", errorAt(CodeInput, token.Position{}, "no source files provided")
 	}
 	// Sort a copy: callers may supply files in any order, and keep their inputs.
 	sources = append([]SourceFile(nil), sources...)
 	sort.Slice(sources, func(i, j int) bool { return sources[i].Filename < sources[j].Filename })
 	fset := token.NewFileSet()
 	c := newCompiler(fset)
-	var files []*ast.File
-	for i, source := range sources {
-		if i > 0 && source.Filename == sources[i-1].Filename {
-			return "", fmt.Errorf("duplicate source file %q", source.Filename)
-		}
-		file, err := parser.ParseFile(fset, source.Filename, source.Source, 0)
-		if err != nil {
-			return "", err
-		}
-		if file.Name.Name != "main" {
-			return "", c.errorf(file.Name, "only package main is supported")
-		}
-		if len(file.Imports) != 0 {
-			return "", c.errorf(file.Imports[0], "imports are not supported yet")
-		}
-		files = append(files, file)
+	files, err := parseModuleFiles(fset, sources, tests != nil)
+	if err != nil {
+		return "", err
 	}
 	config := typeConfig()
 	prelude, err := c.prelude()
@@ -120,7 +114,7 @@ func compileFiles(sources []SourceFile, options Options, tests *[]TestCase) (str
 	}
 	pkg, err := config.Check("main", fset, append([]*ast.File{prelude}, files...), c.info)
 	if err != nil {
-		return "", err
+		return "", typeError(err)
 	}
 	c.registerIntrinsics(prelude)
 	// Lower the complete package through the existing IR. The original nodes
@@ -139,12 +133,12 @@ func compileFiles(sources []SourceFile, options Options, tests *[]TestCase) (str
 	if ok {
 		sig := main.Type().(*types.Signature)
 		if sig.Params().Len() != 0 || sig.Results().Len() != 0 {
-			return "", fmt.Errorf("%s: main must have no parameters or results", c.fset.Position(main.Pos()))
+			return "", errorAt(CodeLanguage, c.fset.PositionFor(main.Pos(), false), "main must have no parameters or results")
 		}
 	}
 	if tests != nil {
-		for i, input := range files {
-			if !strings.HasSuffix(sources[i].Filename, "_test.lang") {
+		for _, input := range files {
+			if !strings.HasSuffix(fset.PositionFor(input.Pos(), false).Filename, "_test.lang") {
 				continue
 			}
 			for _, decl := range input.Decls {
@@ -156,8 +150,8 @@ func compileFiles(sources []SourceFile, options Options, tests *[]TestCase) (str
 				if fn.Recv != nil || fn.Type.TypeParams != nil || sig.Params().Len() != 0 || sig.Results().Len() != 0 {
 					return "", c.errorf(fn, "test functions must have no receiver, type parameters, parameters, or results")
 				}
-				position := c.fset.Position(fn.Name.Pos())
-				*tests = append(*tests, TestCase{Name: fn.Name.Name, Filename: position.Filename, Line: position.Line})
+				position := c.fset.PositionFor(fn.Name.Pos(), false)
+				*tests = append(*tests, TestCase{Name: fn.Name.Name, Filename: position.Filename, Line: position.Line, Column: position.Column, Offset: position.Offset})
 			}
 		}
 		sort.Slice(*tests, func(i, j int) bool { return (*tests)[i].Name < (*tests)[j].Name })
@@ -303,7 +297,7 @@ func (c *compiler) supportedType(t types.Type, seen map[types.Type]bool) bool {
 }
 
 func (c *compiler) errorf(n ast.Node, format string, args ...any) error {
-	return fmt.Errorf("%s: %s", c.fset.Position(n.Pos()), fmt.Sprintf(format, args...))
+	return errorAt(CodeLanguage, c.fset.PositionFor(n.Pos(), false), fmt.Sprintf(format, args...))
 }
 
 func (c *compiler) fresh() string {
@@ -511,8 +505,13 @@ func (c *compiler) statementCode(stmt ast.Stmt) (string, error) {
 		}
 		return "throw({linglang_return, " + c.ret + ", " + value + "})", nil
 	case *ast.IfStmt:
+		init := ""
 		if s.Init != nil {
-			return "", c.errorf(s, "if initializers are not supported yet")
+			var err error
+			init, err = c.statement(s.Init)
+			if err != nil {
+				return "", err
+			}
 		}
 		cond, err := c.expression(s.Cond)
 		if err != nil {
@@ -529,7 +528,11 @@ func (c *compiler) statementCode(stmt ast.Stmt) (string, error) {
 				return "", err
 			}
 		}
-		return "case " + scoped(cond) + " of true -> " + body + "; false -> " + other + " end", nil
+		branch := "case " + scoped(cond) + " of true -> " + body + "; false -> " + other + " end"
+		if s.Init != nil {
+			return scoped(init + ", " + branch), nil
+		}
+		return branch, nil
 	case *ast.SwitchStmt:
 		return c.switchStatement(s)
 	case *ast.ForStmt:

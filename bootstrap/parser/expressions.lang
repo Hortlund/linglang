@@ -203,6 +203,9 @@ func parseType(p *Parser) SyntaxNode {
 				result = parseStruct(p)
 			} else {
 				result = parseIdent(p)
+				if accept(p, ".") {
+					result = parserSyntax(p, "SelectorExpr", at, "", List[SyntaxNode]{result, parseIdent(p)})
+				}
 				if accept(p, "[") {
 					var reversed List[SyntaxNode]
 					for p.reason == "" && p.current.kind != "]" {

@@ -296,6 +296,50 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 			target = "linglang_rt:read_file"
 		case "writeFile":
 			target = "linglang_rt:write_file"
+		case "tcpListen":
+			target = "linglang_io:tcp_listen"
+		case "tcpConnect":
+			target = "linglang_io:tcp_connect"
+		case "tcpAccept":
+			target = "linglang_io:tcp_accept"
+		case "tcpPort":
+			target = "linglang_io:tcp_port"
+		case "tcpRead":
+			target = "linglang_io:tcp_read"
+		case "tcpWrite":
+			target = "linglang_io:tcp_write"
+		case "tcpClose":
+			target = "linglang_io:tcp_close"
+		case "sqliteQuery":
+			target = "linglang_io:sqlite_query"
+		case "sha256":
+			target = "linglang_io:sha256"
+		case "pathInfo":
+			target = "linglang_io:path_info"
+		case "readDirectory":
+			target = "linglang_io:read_directory"
+		case "canonicalPath":
+			target = "linglang_io:canonical_path"
+		case "makeDirectories":
+			target = "linglang_io:make_directories"
+		case "writeNewFile":
+			target = "linglang_io:write_new_file"
+		case "replaceFile":
+			target = "linglang_io:replace_file"
+		case "monotonicMillis":
+			target = "linglang_rt:monotonic_millis"
+		case "modulePath":
+			target = "linglang_rt:module_path"
+		case "testFiles":
+			target = "linglang_rt:test_files"
+		case "toolReport":
+			target = "linglang_rt:tool_report"
+		case "runTestProgramResult":
+			target = "linglang_rt:run_test_program_result"
+		case "runTestProgram":
+			target = "linglang_rt:run_test_program"
+		case "moduleFiles":
+			target = "linglang_rt:module_files"
 		case "sourceFiles":
 			target = "linglang_rt:source_files"
 		case "buildProgram":
@@ -310,6 +354,8 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 			target = "linglang_rt:text_split"
 		case "formatInt":
 			target = "linglang_rt:format_int"
+		case "parseInt":
+			target = "linglang_rt:parse_int"
 		case "trim":
 			target = "linglang_rt:text_trim"
 		case "byteAt":

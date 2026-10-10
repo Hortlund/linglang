@@ -110,7 +110,7 @@ func TestStandaloneDirectoriesAndMarkerChanges(t *testing.T) {
 }
 
 func TestRepositoryStandaloneProgramsAndNestedPackages(t *testing.T) {
-	for _, path := range []string{"../../examples/beans.lang", "../../examples/fuck.lang", "../../benchmarks/arithmetic.lang", "../../examples/prime_lab/main.lang", "../../bootstrap/resolver/main.lang"} {
+	for _, path := range []string{"../../examples/worker_registration.lang", "../../examples/restart_limit.lang", "../../benchmarks/arithmetic.lang", "../../examples/prime_lab/main.lang", "../../bootstrap/resolver/main.lang"} {
 		t.Run(path, func(t *testing.T) {
 			absolute, err := filepath.Abs(path)
 			if err != nil {

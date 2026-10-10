@@ -1,0 +1,9 @@
+package main
+
+// A compatibility compiler can teach the old seed the new native signatures
+// before compiling their callers. This file replaces developer_tools.lang only
+// during --upgrade-seed; it is never included in a published compiler.
+func bootstrapFormat(values List[string]) { panic("seed upgrade compiler: fmt unavailable") }
+func bootstrapInit(values List[string])   { panic("seed upgrade compiler: init unavailable") }
+
+func bootstrapDeps(values List[string]) { panic("seed upgrade compiler: deps unavailable") }

@@ -1,0 +1,18 @@
+package main
+
+func main() {
+	labels := List[string]{"alpha", "beta"}
+	previous := labels
+	labels = prepend("first", labels)
+	println(len(previous), len(labels))
+	var scores Map[string, int]
+	scores = put(scores, "alpha", 7)
+	if score := get(scores, "alpha"); score.ok {
+		println(score.value)
+	}
+	if number := parseInt("42"); number.ok {
+		println(number.value)
+	} else {
+		panic(number.reason)
+	}
+}

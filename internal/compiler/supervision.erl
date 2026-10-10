@@ -2,7 +2,7 @@
 %% to OTP's supervisor behaviour, not a second implementation of supervision.
 -module(linglang_sup).
 -behaviour(supervisor).
--export([start/2, pid/1, add/6, lookup/2, restart/2,
+-export([start/2, pid/1, add/6, add_server/8, lookup/2, restart/2,
          stop_child/2, remove_child/2, stop/1, finish/0]).
 -export([init/1, worker_start_link/4, worker_init/5]).
 
@@ -42,6 +42,19 @@ add(Handle, Name, Worker, Arg, Schema, Options) ->
              start => {?MODULE, worker_start_link, [Worker, Arg, Schema, linglang_rt:gc_stress()]},
              restart => Restart, shutdown => Shutdown, type => worker,
              modules => [linglang_program]},
+    child_result(supervisor:start_child(Pid, Spec)).
+
+add_server(Handle, Name, Handler, Initial, StateSchema, RequestSchema, ReplySchema, Options) ->
+    Pid = active(Handle),
+    Id = name(Name),
+    linglang_rt:validate_message(StateSchema, Initial),
+    Restart = restart_policy(maps:get(field_72657374617274, Options)),
+    Shutdown = shutdown_timeout(maps:get(field_73687574646f776e4d696c6c6973, Options)),
+    Spec = #{id => Id,
+             start => {linglang_server, start_link,
+                       [Handler, Initial, StateSchema, RequestSchema, ReplySchema, linglang_rt:gc_stress()]},
+             restart => Restart, shutdown => Shutdown, type => worker,
+             modules => [linglang_server]},
     child_result(supervisor:start_child(Pid, Spec)).
 
 restart_policy(<<>>) -> permanent;

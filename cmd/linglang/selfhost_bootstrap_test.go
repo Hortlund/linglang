@@ -127,6 +127,12 @@ func TestBootstrapSelfHostProof(t *testing.T) {
 		t.Fatalf("package C: %v\n%s\n%s", err, out, stderr)
 	}
 	t.Logf("Self-built C executable: %s", artifact)
+	t.Run("developer_tools", func(t *testing.T) { testBootstrapDeveloperTools(t, artifact, env) })
+	t.Run("discovery", func(t *testing.T) { testBootstrapDiscovery(t, artifact, env) })
+	t.Run("structured_tooling", func(t *testing.T) { testStructuredDriver(t, artifact, env, "bootstrap") })
+	t.Run("test_runner", func(t *testing.T) { testBootstrapRunner(t, artifact, env) })
+	t.Run("modules", func(t *testing.T) { testBootstrapModules(t, artifact, env) })
+	t.Run("typed_io", func(t *testing.T) { testBootstrapIO(t, artifact, env) })
 	t.Run("cli_stdin", func(t *testing.T) {
 		testBootstrapStdin(t, artifact, env)
 	})
@@ -137,6 +143,8 @@ func TestBootstrapSelfHostProof(t *testing.T) {
 		testBootstrapRunLifetime(t, artifact, env)
 	})
 	for _, f := range []struct{ name, code, want string }{
+		{"if_initializers", ifInitializerFixture, "if initializers ok\n"},
+		{"otp_server_calls", otpServerFixture, otpServerOutput},
 		{"otp_timers", otpTimerFixture, otpTimerOutput},
 		{"otp_messages", otpMessagesFixture, "true 7 true 8\nfalse 0 true true\ntrue true true\n"},
 		{"otp_supervisor", otpSupervisorFixture, "true true true\ntrue true true\ntrue true true\n"},
@@ -223,4 +231,24 @@ func TestBootstrapSelfHostProof(t *testing.T) {
 			t.Fatalf("C/A diagnostics differ: %q / %q", got, want)
 		}
 	}
+}
+
+// Reuse an already verified artifact to extend runtime checks without repeating
+// the fixed-point build. The caller must preserve the original proof result.
+func TestSelfHostedFeatures(t *testing.T) {
+	artifact := os.Getenv("LINGLANG_COMPILER_UNDER_TEST")
+	if artifact == "" {
+		t.Skip("set LINGLANG_COMPILER_UNDER_TEST to a verified self-built compiler")
+	}
+	artifact, err := filepath.Abs(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := isolatedOTPEnvironment(t, filepath.Join(t.TempDir(), "otp"), false)
+	t.Run("developer_tools", func(t *testing.T) { testBootstrapDeveloperTools(t, artifact, env) })
+	t.Run("discovery", func(t *testing.T) { testBootstrapDiscovery(t, artifact, env) })
+	t.Run("structured_tooling", func(t *testing.T) { testStructuredDriver(t, artifact, env, "bootstrap") })
+	t.Run("test_runner", func(t *testing.T) { testBootstrapRunner(t, artifact, env) })
+	t.Run("modules", func(t *testing.T) { testBootstrapModules(t, artifact, env) })
+	t.Run("typed_io", func(t *testing.T) { testBootstrapIO(t, artifact, env) })
 }

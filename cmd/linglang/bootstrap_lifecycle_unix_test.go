@@ -17,6 +17,13 @@ import (
 )
 
 func testBootstrapRunLifetime(t *testing.T, cli string, env []string) {
+	testBootstrapLifetime(t, cli, env, false)
+}
+func testBootstrapTestLifetime(t *testing.T, cli string, env []string) {
+	testBootstrapLifetime(t, cli, env, true)
+}
+
+func testBootstrapLifetime(t *testing.T, cli string, env []string, testMode bool) {
 	t.Helper()
 	for _, program := range []struct {
 		name  string
@@ -46,12 +53,20 @@ func testBootstrapRunLifetime(t *testing.T, cli string, env []string) {
 					source, ready := filepath.Join(dir, "loop.lang"), filepath.Join(dir, "ready")
 					code := `package main
 func main(){saved:=writeFile(head(args()).value,"ready");assert(saved.ok);` + program.body + `}`
+					if testMode {
+						source = filepath.Join(dir, "loop_test.lang")
+						code = "package main\nfunc TestLifetime(){saved:=writeFile(" + strconv.Quote(ready) + ",\"ready\");assert(saved.ok);" + program.body + "}"
+					}
 					if err := os.WriteFile(source, []byte(code), 0600); err != nil {
 						t.Fatal(err)
 					}
 					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 					defer cancel()
-					cmd := exec.CommandContext(ctx, cli, "run", source, "--", ready)
+					arguments := []string{"run", source, "--", ready}
+					if testMode {
+						arguments = []string{"test", "--json", "--timeout", "10s", source}
+					}
+					cmd := exec.CommandContext(ctx, cli, arguments...)
 					cmd.Env = append(append([]string{}, env...), "TMPDIR="+dir)
 					// Isolate Ctrl+C from the test runner's own terminal group.
 					cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}

@@ -90,7 +90,12 @@ def main():
             directory = work / str(index)
             directory.mkdir()
             with zipfile.ZipFile(path) as archive:
-                for filename in ("linglang_program.beam", "linglang_rt.beam", "linglang_sup.beam"):
+                modules = ["linglang_program.beam", "linglang_rt.beam", "linglang_sup.beam"]
+                # Preserve comparisons with older, frozen compiler artifacts.
+                for optional in ("linglang_server.beam", "linglang_io.beam"):
+                    if optional in archive.namelist():
+                        modules.append(optional)
+                for filename in modules:
                     (directory / filename).write_bytes(archive.read(filename))
             directories[name] = directory
             provenance[name] = {"path": str(path), "artifact_sha256": digest(path.read_bytes()),

@@ -1,0 +1,297 @@
+package main
+
+type LinkedModule struct {
+	name   string
+	prefix string
+	names  Map[string, string]
+}
+
+type ModuleLinker struct {
+	library bool
+	modules Map[string, LinkedModule]
+	active  Map[string, bool]
+	files   List[SyntaxNode]
+	next    int
+	issue   ToolIssue
+}
+
+func moduleError(l *ModuleLinker, at Token, reason string) {
+	if l.issue.code == "" {
+		l.issue = ToolIssue{code: "LL1002", at: at, reason: reason}
+	}
+}
+
+func moduleDeclarations(l *ModuleLinker, file SyntaxNode) List[SyntaxNode] {
+	var names List[SyntaxNode]
+	for _, decl := range tail(file.children) {
+		if decl.kind == "FuncDecl" {
+			if childAt(decl, 0).text == "_" {
+				moduleError(l, decl.at, "blank function declarations are unsupported")
+			}
+			names = append(names, childAt(decl, 0))
+		}
+		if decl.kind == "GenDecl" {
+			for _, spec := range decl.children {
+				if spec.kind == "TypeSpec" {
+					names = append(names, childAt(spec, 0))
+				} else {
+					for _, name := range childAt(spec, 0).children {
+						names = append(names, name)
+					}
+				}
+			}
+		}
+	}
+	return names
+}
+
+func moduleQualify(l *ModuleLinker, node SyntaxNode, aliases Map[string, LinkedModule]) SyntaxNode {
+	if l.issue.code != "" {
+		return node
+	}
+	if node.kind == "Ident" && len(node.text) >= 7 && slice(node.text, 0, 7) == "__llpkg" {
+		moduleError(l, node.at, "names beginning __llpkg are reserved")
+	}
+	if node.kind == "SelectorExpr" {
+		base := childAt(node, 0)
+		alias := get(aliases, base.text)
+		if base.kind == "Ident" && alias.ok {
+			member := childAt(node, 1)
+			exported := get(alias.value.names, member.text)
+			// Initial public namespace uses ASCII uppercase declarations.
+			if !exported.ok || byteAt(member.text, 0) < 65 || byteAt(member.text, 0) > 90 {
+				moduleError(l, node.at, "package does not export "+member.text)
+			}
+			node.kind = "Ident"
+			node.text = exported.value
+			node.children = nil
+			return node
+		}
+	}
+	var declarations List[SyntaxNode]
+	if node.kind == "AssignStmt" && node.text == ":=" {
+		declarations = childAt(node, 0).children
+	}
+	if node.kind == "RangeStmt" && node.text == ":=" {
+		declarations = List[SyntaxNode]{childAt(node, 0), childAt(node, 1)}
+	}
+	if node.kind == "FuncDecl" {
+		for _, field := range childAt(node, 1).children {
+			for _, name := range childAt(field, 0).children {
+				declarations = append(declarations, name)
+			}
+		}
+	}
+	if node.kind == "ValueSpec" {
+		declarations = childAt(node, 0).children
+	}
+	if node.kind == "TypeSpec" {
+		declarations = List[SyntaxNode]{childAt(node, 0)}
+	}
+	for _, name := range declarations {
+		if get(aliases, name.text).ok {
+			moduleError(l, name.at, "cannot shadow an import alias")
+		}
+	}
+	var children List[SyntaxNode]
+	for _, child := range node.children {
+		children = append(children, moduleQualify(l, child, aliases))
+	}
+	node.children = children
+	return node
+}
+
+func moduleRename(node SyntaxNode, renames Map[string, string]) SyntaxNode {
+	if node.kind == "Ident" {
+		name := get(renames, sourceIdentity(node.at))
+		if name.ok {
+			node.text = name.value
+		}
+	}
+	var children List[SyntaxNode]
+	for _, child := range node.children {
+		children = append(children, moduleRename(child, renames))
+	}
+	node.children = children
+	return node
+}
+
+func moduleLoad(l *ModuleLinker, directory string, files List[SyntaxNode], root bool, depth int) LinkedModule {
+	if depth > 64 {
+		moduleError(l, Token{}, "import nesting exceeds 64 packages")
+		return LinkedModule{}
+	}
+	if get(l.active, directory).value {
+		moduleError(l, Token{}, "import cycle at "+directory)
+		return LinkedModule{}
+	}
+	cached := get(l.modules, directory)
+	if cached.ok {
+		return cached.value
+	}
+	l.active = put(l.active, directory, true)
+	m := LinkedModule{}
+	if !root {
+		l.next++
+		m.prefix = "__llpkg" + formatInt(l.next) + "_"
+		paths := moduleFiles(directory)
+		if !paths.ok {
+			moduleError(l, Token{}, paths.reason)
+			return LinkedModule{}
+		}
+		parsed := bootstrapParse(paths.value)
+		if parsed.issue.code != "" {
+			l.issue = parsed.issue
+			return LinkedModule{}
+		}
+		files = parsed.files
+	}
+	var top Map[string, string]
+	for _, file := range files {
+		name := childAt(file, 0).text
+		if root && !l.library && name != "main" {
+			moduleError(l, file.at, "program root requires package main")
+		}
+		if !root && name == "main" {
+			moduleError(l, file.at, "imported packages cannot be main")
+		}
+		if m.name != "" && m.name != name {
+			moduleError(l, file.at, "mixed package names")
+		}
+		m.name = name
+		for _, declaration := range moduleDeclarations(l, file) {
+			if declaration.text == "_" {
+				continue
+			}
+			if declaration.text == "init" {
+				moduleError(l, declaration.at, "init functions are unsupported")
+			}
+			linkedName := m.prefix + declaration.text
+			if root && moduleUniverseName(declaration.text) {
+				linkedName = "__llpkg0_" + declaration.text
+			}
+			m.names = put(m.names, declaration.text, linkedName)
+			top = put(top, sourceIdentity(declaration.at), linkedName)
+		}
+	}
+	if l.issue.code != "" {
+		return LinkedModule{}
+	}
+	var qualified List[SyntaxNode]
+	var fileAliases Map[string, bool]
+	for _, file := range files {
+		var aliases Map[string, LinkedModule]
+		var declarations List[SyntaxNode]
+		for _, decl := range tail(file.children) {
+			if decl.kind != "ImportDecl" {
+				declarations = append(declarations, decl)
+				continue
+			}
+			if head(declarations).ok {
+				moduleError(l, decl.at, "imports must precede declarations")
+			}
+			for _, spec := range decl.children {
+				path := constantText(spec.text, false).text
+				if !((len(path) >= 2 && slice(path, 0, 2) == "./") || (len(path) >= 3 && slice(path, 0, 3) == "../")) {
+					moduleError(l, spec.at, "imports require ./ or ../ local package paths")
+				}
+				if l.issue.code != "" {
+					return LinkedModule{}
+				}
+				dep := moduleLoad(l, modulePath(file.at.filename, path), nil, false, depth+1)
+				if l.issue.code != "" {
+					if l.issue.at.line == 0 {
+						l.issue.at = spec.at
+					} else {
+						l.issue.related = append(l.issue.related, spec.at)
+					}
+					return LinkedModule{}
+				}
+				alias := childAt(spec, 0).text
+				if alias == "" {
+					alias = dep.name
+				}
+				if alias == "_" || get(aliases, alias).ok || get(m.names, alias).ok {
+					moduleError(l, spec.at, "invalid or conflicting import alias "+alias)
+				}
+				aliases = put(aliases, alias, dep)
+				fileAliases = put(fileAliases, file.at.filename+":"+alias, true)
+			}
+		}
+		name := childAt(file, 0)
+		name.text = "main"
+		file.children = prepend(name, declarations)
+		qualified = append(qualified, moduleQualify(l, file, aliases))
+	}
+	if l.issue.code != "" {
+		return LinkedModule{}
+	}
+	bindings := resolve(append(l.files, qualified...))
+	if !bindings.ok {
+		moduleError(l, bindings.at, bindings.reason)
+	}
+	if l.issue.code != "" {
+		return LinkedModule{}
+	}
+	renames := top
+	for _, reference := range bindings.references {
+		if get(fileAliases, reference.at.filename+":"+reference.symbol.name).ok {
+			moduleError(l, reference.at, "import alias "+reference.symbol.name+" requires a member selector")
+		}
+		name := get(top, sourceIdentity(reference.symbol.at))
+		if name.ok {
+			renames = put(renames, sourceIdentity(reference.at), name.value)
+		}
+	}
+	for _, file := range qualified {
+		l.files = append(l.files, moduleRename(file, renames))
+	}
+	l.active = put(l.active, directory, false)
+	l.modules = put(l.modules, directory, m)
+	return m
+}
+
+// Match the supported Go-universe names, distinct from prelude declarations.
+// Root shadows need an internal name to leave dependency builtins untouched.
+func moduleUniverseName(name string) bool {
+	switch name {
+	case "int", "bool", "string", "len", "append", "make", "new", "panic", "print", "println", "true", "false", "nil", "iota":
+		return true
+	}
+	return false
+}
+
+func bootstrapLinkMode(files List[SyntaxNode], library bool) ToolFiles {
+	files = sortedModuleFiles(files)
+	hasImports := false
+	for _, file := range files {
+		for _, decl := range tail(file.children) {
+			if decl.kind == "ImportDecl" {
+				hasImports = true
+			}
+		}
+	}
+	if !hasImports && !library {
+		return ToolFiles{files: files}
+	}
+	l := ModuleLinker{library: library}
+	moduleLoad(&l, modulePath(head(files).value.at.filename, "."), files, true, 0)
+	return ToolFiles{files: l.files, issue: l.issue}
+}
+
+func sortedModuleFiles(files List[SyntaxNode]) List[SyntaxNode] {
+	var sorted List[SyntaxNode]
+	for _, file := range files {
+		var prefix List[SyntaxNode]
+		rest := sorted
+		for head(rest).ok && head(rest).value.at.filename < file.at.filename {
+			prefix = prepend(head(rest).value, prefix)
+			rest = tail(rest)
+		}
+		sorted = prepend(file, rest)
+		for _, previous := range prefix {
+			sorted = prepend(previous, sorted)
+		}
+	}
+	return sorted
+}

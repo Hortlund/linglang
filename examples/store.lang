@@ -1,0 +1,102 @@
+package main
+
+const (
+	Get = iota
+	Put
+	Crash
+)
+
+type Store struct {
+	items Map[string, string]
+}
+
+type Request struct {
+	op    int
+	key   string
+	value string
+}
+
+type Reply struct {
+	value string
+	found bool
+}
+
+// OTP serializes calls. This mutable state belongs to this server process.
+func handleStore(state *Store, request Request) Reply {
+	switch request.op {
+	case Get:
+		item := get(state.items, request.key)
+		return Reply{value: item.value, found: item.ok}
+	case Put:
+		state.items = put(state.items, request.key, request.value)
+		return Reply{value: request.value, found: true}
+	case Crash:
+		panic("store crashed")
+	}
+	return Reply{}
+}
+
+type Client struct {
+	store  Pid
+	parent Pid
+	id     int
+}
+
+func client(args Client) {
+	key := formatInt(args.id)
+	written := call[Reply](args.store, Request{op: Put, key: key, value: key}, 1000)
+	assert(written.ok)
+	read := call[Reply](args.store, Request{op: Get, key: key}, 1000)
+	assert(read.ok && read.value.found && read.value.value == key)
+	send(args.parent, args.id)
+}
+
+func replacement(supervisor Supervisor, previous Pid) Pid {
+	for i := 0; i < 5000; i++ {
+		child := lookupChild(supervisor, "store")
+		if child.ok && child.pid != previous {
+			return child.pid
+		}
+		receive[bool](1)
+	}
+	panic("store did not restart")
+	return nil
+}
+
+func main() {
+	supervisor := startSupervisor(3, 5)
+	initial := Store{items: Map[string, string]{"greeting": "hello from BEAM"}}
+	child := superviseServer(supervisor, "store", handleStore, initial, ChildOptions{})
+	assert(child.ok)
+	// Initial state is a snapshot. Changing this copy cannot change the server.
+	initial.items = put(initial.items, "greeting", "changed outside")
+	result := call[Reply](child.pid, Request{op: Get, key: "greeting"}, 1000)
+	assert(result.ok)
+	println("Greeting:", result.value.value)
+
+	for i := 0; i < 4; i++ {
+		spawn(client, Client{store: child.pid, parent: self(), id: i})
+	}
+	var completed Map[int, bool]
+	for i := 0; i < 4; i++ {
+		done := receive[int](5000)
+		assert(done.ok)
+		completed = put(completed, done.value, true)
+	}
+	assert(len(completed) == 4)
+	println("Concurrent clients completed:", len(completed))
+
+	failed := call[Reply](child.pid, Request{op: Crash}, 1000)
+	assert(!failed.ok && !failed.timedOut)
+	println("Call failed:", failed.reason)
+	pid := replacement(supervisor, child.pid)
+	println("OTP restarted store:", pid != child.pid)
+	// Restart restores the initial snapshot. This store is intentionally in memory.
+	result = call[Reply](pid, Request{op: Get, key: "0"}, 1000)
+	assert(result.ok)
+	println("Previous client data survived:", result.value.found)
+	result = call[Reply](pid, Request{op: Get, key: "greeting"}, 1000)
+	assert(result.ok)
+	println("Restored greeting:", result.value.value)
+	assert(stopSupervisor(supervisor))
+}

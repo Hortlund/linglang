@@ -1,0 +1,76 @@
+package main
+
+// Each worker registers its address, answers a status request, and exits.
+type WorkerArgs struct {
+	parent Pid
+	name   string
+}
+type Registration struct {
+	name   string
+	worker Pid
+}
+type StatusRequest struct{ reply Pid }
+type WorkerStatus struct {
+	name  string
+	ready bool
+}
+
+func worker(args WorkerArgs) {
+	send(args.parent, Registration{name: args.name, worker: self()})
+	request := receive[StatusRequest](5000)
+	if !request.ok {
+		panic("status request timed out")
+	}
+	send(request.value.reply, WorkerStatus{name: args.name, ready: true})
+}
+
+func main() {
+	names := List[string]{"worker-1", "worker-2", "worker-3"}
+	var workers List[Process]
+	var addresses Map[string, Pid]
+	var statuses Map[string, bool]
+
+	// Transient children are not restarted after a normal exit.
+	supervisor := startSupervisor(3, 5)
+	for _, name := range names {
+		child := supervise(supervisor, name, worker,
+			WorkerArgs{parent: self(), name: name}, ChildOptions{restart: "transient"})
+		if !child.ok {
+			panic(child.reason)
+		}
+		workers = append(workers, Process{pid: child.pid, monitor: monitor(child.pid)})
+	}
+	for range names {
+		registration := receive[Registration](5000)
+		if !registration.ok {
+			panic("worker registration timed out")
+		}
+		addresses = put(addresses, registration.value.name, registration.value.worker)
+	}
+
+	println("registered workers:", len(addresses))
+	for _, name := range names {
+		address := get(addresses, name)
+		if !address.ok {
+			panic("worker address missing")
+		}
+		send(address.value, StatusRequest{reply: self()})
+		status := receive[WorkerStatus](5000)
+		if !status.ok || status.value.name != name || !status.value.ready {
+			panic("worker status check failed")
+		}
+		statuses = put(statuses, name, status.value.ready)
+		println(name + ": ready")
+	}
+
+	for _, process := range workers {
+		exit := wait(process.monitor, 5000)
+		if !exit.ok || !exit.normal {
+			panic("worker did not finish normally")
+		}
+	}
+	if !stopSupervisor(supervisor) {
+		panic("supervisor shutdown failed")
+	}
+	println("ready workers:", len(statuses))
+}

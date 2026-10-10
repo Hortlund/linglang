@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Linglang test JSON Lines event, version 1",
+  "type": "object",
+  "required": ["schemaVersion", "command", "compiler", "event"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "command": { "const": "test" },
+    "compiler": { "type": "string" },
+    "event": { "enum": ["suite_start", "test_start", "test_end", "diagnostic", "suite_end"] },
+    "name": { "type": "string" },
+    "location": { "$ref": "check-v1.schema.json#/$defs/location" },
+    "durationMillis": { "type": "integer", "minimum": 0 },
+    "status": { "enum": ["pass", "fail", "timeout"] },
+    "reason": { "type": "string" },
+    "total": { "type": "integer", "minimum": 0 },
+    "passed": { "type": "integer", "minimum": 0 },
+    "failed": { "type": "integer", "minimum": 0 },
+    "ok": { "type": "boolean" },
+    "diagnostic": { "$ref": "check-v1.schema.json#/$defs/diagnostic" }
+  },
+  "oneOf": [
+    { "properties": { "event": { "const": "suite_start" } }, "required": ["total"] },
+    { "properties": { "event": { "const": "test_start" } }, "required": ["name", "location"] },
+    { "properties": { "event": { "const": "test_end" } }, "required": ["name", "location", "durationMillis", "status", "reason"] },
+    { "properties": { "event": { "const": "diagnostic" } }, "required": ["diagnostic"] },
+    { "properties": { "event": { "const": "suite_end" } }, "required": ["total", "passed", "failed", "ok"] }
+  ]
+}

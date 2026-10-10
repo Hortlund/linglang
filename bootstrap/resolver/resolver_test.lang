@@ -70,7 +70,7 @@ func TestNameErrorsAndDeferredMembers() {
 		result := resolveSource(source)
 		assert(!result.ok && result.reason != "" && result.at.filename == "test.lang" && result.at.line > 0 && result.at.column > 0)
 	}
-	result := resolveSource("package main\ntype N struct{x int};func f(){n:=N{x:1};println(n.missing,Map[string,int]{key:1})}")
+	result := resolveSource("package main\nconst key=1;type N struct{x int};func f(){n:=N{x:1};println(n.missing,Map[int,int]{key:1})}")
 	assert(result.ok && len(result.deferred) == 3)
 	result = resolveSource("package main\nfunc f(){println(missing)}")
 	assert(result.at.offset == len("package main\nfunc f(){println("))
@@ -84,4 +84,15 @@ func TestLongOperatorTreesAndLocalTypes() {
 	result := resolveSource("package main\nfunc f(n int){println(" + expression + ")}")
 	assert(result.ok && len(result.references) == 131)
 	assert(resolveSource("package main\nfunc f(){type N struct{next *N};println(N{})}").ok)
+}
+
+func TestElidedMapKeyBindings() {
+	source := "package main\nconst key=2;type Item struct{key int};func f(){_=Map[string,List[Map[int,int]]]{\"x\":{{key:42}}};_=List[Item]{{key:1}}}"
+	result := resolveSource(source)
+	assert(result.ok)
+	assert(referenceAt(result, offsetOf(source, "key:42")).symbol.at.offset == offsetOf(source, "key=2"))
+	for _, reference := range result.references {
+		assert(reference.at.offset != offsetOf(source, "key:1"))
+	}
+	assert(!resolveSource("package main\nfunc f(){_=List[Map[int,int]]{{missing:1}}}").ok)
 }

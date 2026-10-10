@@ -1,0 +1,12 @@
+package main
+
+func TestCounterState() {
+	supervisor := startSupervisor(3, 5)
+	counter := superviseServer(supervisor, "counter", add, 10, ChildOptions{})
+	assert(counter.ok)
+	first := call[int](counter.pid, 2, 1000)
+	assert(first.ok && first.value == 12)
+	second := call[int](counter.pid, 3, 1000)
+	assert(second.ok && second.value == 15)
+	assert(stopSupervisor(supervisor))
+}

@@ -1,4 +1,4 @@
-name: beans remain beans
+name: CI
 
 on:
   push:
@@ -31,18 +31,29 @@ jobs:
         run: test -z "$(gofmt -l cmd internal)"
       - name: Vet
         run: go vet ./...
+      - name: Build optional SQLite adapter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev
+          make sqlite
       - name: Compiler and dev tool tests
         run: go test ./internal/... ./cmd/bench -count=1 -timeout=10m
       - name: CLI, OTP, and packaging smoke tests
-        run: go test ./cmd/linglang -run '^(TestExecutionWithGCFlags|TestSupervisorEscalationExitsCleanly|TestDirectoryCLI|TestReadSources|TestPackCLI|TestDeveloperCommands|TestIsolatedOTPLaunchers|TestBootstrapEmitterPackedWithoutGo)$' -count=1 -timeout=5m
+        run: go test ./cmd/linglang -run '^(TestExecutionWithGCFlags|TestSupervisorEscalationExitsCleanly|TestDirectoryCLI|TestReadSources|TestPackCLI|TestDeveloperCommands|TestStructuredRunnerCLI|TestStructuredToolingCLI|TestCheckTestDiscovery|TestToolingOutputFailure|TestInitProject|TestInitRejectsExistingContent|TestBookExamples|TestLocalModules|TestDependencyLock|TestWebCounter|TestIsolatedOTPLaunchers|TestBootstrapEmitterPackedWithoutGo)$' -count=1 -timeout=5m
+      - name: Self-hosted driver feature checks
+        run: go test ./cmd/linglang -run 'TestBootstrapCLI/.*/(test_runner|modules|typed_io|structured_tooling|developer_tools|discovery)' -count=1 -timeout=8m
+      - name: Go-free build orchestration checks
+        run: go test ./cmd/linglang -run 'TestGoFreeBootstrapTool|TestBootstrapSchedulerDefaults' -count=1 -timeout=2m
       - name: Build the CLI
         run: go build -o _build/linglang ./cmd/linglang
       - name: Check example formatting
-        run: ./_build/linglang fmt --check examples/bean_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang
-      - name: Test beans on both backends with GC stress
+        run: ./_build/linglang fmt --check examples/worker_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang
+      - name: Test workers on both backends with GC stress
         run: |
-          ./_build/linglang test --gc-stress --gc-stats examples/bean_tests
-          ./_build/linglang test --no-opt --gc-stress --gc-stats examples/bean_tests
+          ./_build/linglang test --gc-stress --gc-stats examples/worker_tests
+          ./_build/linglang test --no-opt --gc-stress --gc-stats examples/worker_tests
+          ./_build/linglang test --gc-stress tests/concurrency
+          ./_build/linglang test --no-opt --gc-stress tests/concurrency
 
   compatibility:
     name: ${{ matrix.os }} / OTP ${{ matrix.otp }}
@@ -67,6 +78,11 @@ jobs:
         run: test -z "$(gofmt -l cmd internal)"
       - name: Vet
         run: go vet ./...
+      - name: Install SQLite development headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlite3-dev
       - name: Compiler, runtime, CLI, packaging, and release tests
         # The baseline frontend self-check plus per-fixture BEAM launches can
         # exceed ten minutes on hosted runners. Individual VMs remain bounded.
@@ -74,11 +90,13 @@ jobs:
       - name: Build the CLI
         run: go build -o _build/linglang ./cmd/linglang
       - name: Check example formatting
-        run: ./_build/linglang fmt --check examples/bean_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang
-      - name: Test beans and the bootstrap tools on both backends with GC stress
+        run: ./_build/linglang fmt --check examples/worker_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang
+      - name: Test workers and the bootstrap tools on both backends with GC stress
         run: |
-          ./_build/linglang test --gc-stress --gc-stats examples/bean_tests
-          ./_build/linglang test --no-opt --gc-stress --gc-stats examples/bean_tests
+          ./_build/linglang test --gc-stress --gc-stats examples/worker_tests
+          ./_build/linglang test --no-opt --gc-stress --gc-stats examples/worker_tests
+          ./_build/linglang test --gc-stress tests/concurrency
+          ./_build/linglang test --no-opt --gc-stress tests/concurrency
           ./_build/linglang test --gc-stress --gc-stats bootstrap/lexer
           ./_build/linglang test --no-opt --gc-stress --gc-stats bootstrap/lexer
           ./_build/linglang test --gc-stress --gc-stats bootstrap/parser
@@ -117,4 +135,20 @@ jobs:
         with:
           name: linglang-vscode-linux-x64
           path: dist/linglang-vscode-linux-x64.vsix
+          if-no-files-found: error
+
+  book:
+    name: Build language book
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install mdBook
+        run: cargo install mdbook --version 0.5.2 --locked
+      - name: Build chapters and resolve source includes
+        run: mdbook build book
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linglang-book
+          path: _build/book/
           if-no-files-found: error

@@ -262,6 +262,9 @@ func (g *localLowering) statement(stmt ast.Stmt, next, stop, again *flowBlock) *
 		if s.Else != nil {
 			b.other = g.statement(s.Else, next, stop, again)
 		}
+		if s.Init != nil {
+			return g.statement(s.Init, b, stop, again)
+		}
 		return b
 	case *ast.ForStmt:
 		if info := g.c.rangeLoops[s]; info != nil {

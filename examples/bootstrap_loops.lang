@@ -21,7 +21,7 @@ func countIdentifiers(text string) int {
 }
 
 func main() {
-	text := "beans = 55; println(beans)"
+	text := "value = 55; println(value)"
 	assert(countIdentifiers(text) == 3)
 	println("identifiers:", countIdentifiers(text))
 	total := 0

@@ -1,0 +1,233 @@
+package main
+
+type DependencyFile struct {
+	path   string
+	sha256 string
+}
+type DependencyResult struct {
+	files  List[DependencyFile]
+	target string
+	issue  ToolIssue
+}
+
+// Match the linker's lexical package identities; do not resolve symlink aliases
+// differently here. Lock paths remain relative and relocatable, including ../.
+func dependencyAbsolute(path string) string { return modulePath(".", path) }
+func dependencyRelative(root string, path string) string {
+	a := split(root, "/")
+	b := split(path, "/")
+	for head(a).ok && head(b).ok && head(a).value == head(b).value {
+		a = tail(a)
+		b = tail(b)
+	}
+	var parts List[string]
+	for _, component := range a {
+		if component != "" {
+			parts = append(parts, "..")
+		}
+	}
+	parts = append(parts, b...)
+	return join(parts, "/")
+}
+func dependencyCollect(path string) DependencyResult {
+	// Keep the caller's path for filesystem reads, just like check/build. A
+	// lexical cleanup of symlink/.. can select a different source file.
+	root := dependencyAbsolute(path)
+	info := pathInfo(path)
+	if !info.ok {
+		return DependencyResult{issue: ToolIssue{code: "LL1000", reason: path + ": " + info.reason}}
+	}
+	// sourceFiles follows explicitly selected links, just like the compiler.
+	if info.kind == "symlink" {
+		resolved := canonicalPath(path)
+		if !resolved.ok {
+			return DependencyResult{issue: ToolIssue{code: "LL1000", reason: resolved.reason}}
+		}
+		info = pathInfo(resolved.value)
+	}
+	if info.kind != "directory" && info.kind != "regular" {
+		return DependencyResult{issue: ToolIssue{code: "LL1000", reason: path + ": source must be a regular file or directory"}}
+	}
+	if info.kind != "directory" {
+		root = modulePath(path, ".")
+	}
+	r := DependencyResult{target: root + "/linglang.lock"}
+	names := sourceFiles(List[string]{path})
+	if !names.ok {
+		r.issue = ToolIssue{code: "LL1000", reason: names.reason}
+		return r
+	}
+	parsed := bootstrapParse(names.value)
+	if parsed.issue.code != "" {
+		r.issue = parsed.issue
+		return r
+	}
+	for _, file := range parsed.files {
+		if childAt(file, 0).text != "main" {
+			r.issue = ToolIssue{code: "LL1002", reason: "program root requires package main", at: file.at}
+			return r
+		}
+	}
+	// Use the same linker as builds, without type checking or executing code.
+	linked := bootstrapLinkMode(parsed.files, false)
+	if linked.issue.code != "" {
+		r.issue = linked.issue
+		return r
+	}
+	var own Map[string, bool]
+	for _, name := range names.value {
+		own = put(own, dependencyAbsolute(name), true)
+	}
+	var seen Map[string, bool]
+	for _, file := range sortedModuleFiles(linked.files) {
+		name := dependencyAbsolute(file.at.filename)
+		if get(own, name).ok || get(seen, name).ok {
+			continue
+		}
+		seen = put(seen, name, true)
+		input := readFile(file.at.filename)
+		if !input.ok {
+			r.issue = ToolIssue{code: "LL1000", reason: name + ": " + input.reason}
+			return r
+		}
+		entry := DependencyFile{path: dependencyRelative(root, name), sha256: sha256(input.value)}
+		var prefix List[DependencyFile]
+		rest := r.files
+		for head(rest).ok && head(rest).value.path < entry.path {
+			prefix = prepend(head(rest).value, prefix)
+			rest = tail(rest)
+		}
+		r.files = prepend(entry, rest)
+		for _, item := range prefix {
+			r.files = prepend(item, r.files)
+		}
+	}
+	return r
+}
+func dependencyFilesJSON(files List[DependencyFile]) string {
+	var parts List[string]
+	for _, file := range files {
+		parts = append(parts, "{\"path\":"+toolQuote(file.path)+",\"sha256\":"+toolQuote(file.sha256)+"}")
+	}
+	return "[" + join(parts, ",") + "]"
+}
+func dependencyLockText(files List[DependencyFile]) string {
+	if !head(files).ok {
+		return "{\n  \"version\": 1,\n  \"files\": []\n}\n"
+	}
+	var parts List[string]
+	for _, file := range files {
+		parts = append(parts, "    {\n      \"path\": "+toolQuote(file.path)+",\n      \"sha256\": "+toolQuote(file.sha256)+"\n    }")
+	}
+	return "{\n  \"version\": 1,\n  \"files\": [\n" + join(parts, ",\n") + "\n  ]\n}\n"
+}
+func dependencyVerify(source string, files List[DependencyFile]) ToolIssue {
+	parsed := parseJSON(source)
+	if !parsed.ok {
+		return ToolIssue{code: "LL1001", reason: "invalid lock JSON at byte " + formatInt(parsed.offset) + ": " + parsed.reason}
+	}
+	v := parsed.value
+	if v.kind != "object" || len(v.keys) != 2 || !get(v.members, "version").ok || !get(v.members, "files").ok {
+		return ToolIssue{code: "LL1001", reason: "lock requires exactly version and files"}
+	}
+	version := get(v.members, "version").value
+	entries := get(v.members, "files").value
+	if version.kind != "number" || version.text != "1" || entries.kind != "array" {
+		return ToolIssue{code: "LL1001", reason: "lock requires integer version 1 and a files array"}
+	}
+	remaining := files
+	changed := len(entries.items) != len(files)
+	var seen Map[string, bool]
+	for _, entry := range entries.items {
+		path := get(entry.members, "path").value
+		hash := get(entry.members, "sha256").value
+		if entry.kind != "object" || len(entry.keys) != 2 || path.kind != "string" || hash.kind != "string" {
+			return ToolIssue{code: "LL1001", reason: "lock entries require exactly path and sha256 strings"}
+		}
+		if get(seen, path.text).ok {
+			return ToolIssue{code: "LL1001", reason: "duplicate lock path"}
+		}
+		seen = put(seen, path.text, true)
+		if !head(remaining).ok || head(remaining).value.path != path.text || head(remaining).value.sha256 != hash.text {
+			changed = true
+		}
+		remaining = tail(remaining)
+	}
+	if changed {
+		return ToolIssue{code: "LL1006", reason: "dependencies changed; review sources and run deps to update"}
+	}
+	return ToolIssue{}
+}
+func dependencyReport(r DependencyResult, check bool, json bool) {
+	if json {
+		issues := ""
+		if r.issue.code != "" {
+			issues = toolIssueJSON(r.issue)
+		}
+		mode := "write"
+		if check {
+			mode = "check"
+		}
+		toolReport("{\"schemaVersion\":1,\"command\":\"deps\",\"compiler\":\"bootstrap\",\"mode\":"+toolQuote(mode)+",\"ok\":"+toolBool(r.issue.code == "")+",\"lockFile\":"+toolQuote(r.target)+",\"files\":"+dependencyFilesJSON(r.files)+",\"diagnostics\":["+issues+"]}", r.issue.code == "")
+		return
+	}
+	if r.issue.code != "" {
+		toolFailure(BootstrapOptions{}, 0, r.issue)
+		return
+	}
+	if check {
+		println("Verified " + formatInt(len(r.files)) + " dependency source files")
+	} else {
+		println("Locked " + formatInt(len(r.files)) + " dependency source files in " + r.target)
+	}
+}
+func bootstrapDeps(values List[string]) {
+	check := false
+	json := false
+	path := "."
+	hasPath := false
+	for _, value := range values {
+		if value == "--check" {
+			check = true
+		} else if value == "--json" {
+			json = true
+		} else {
+			if value == "" || byteAt(value, 0) == 45 || hasPath {
+				panic("deps accepts --check, --json and at most one source path")
+			}
+			path = value
+			hasPath = true
+		}
+	}
+	r := dependencyCollect(path)
+	if r.issue.code == "" {
+		info := pathInfo(r.target)
+		if info.ok && info.kind != "regular" {
+			r.issue = ToolIssue{code: "LL1000", reason: r.target + ": lock must be a regular file"}
+		} else if !info.ok && info.reason != "enoent" {
+			r.issue = ToolIssue{code: "LL1000", reason: r.target + ": " + info.reason}
+		} else {
+			previous := TextResult{}
+			if info.ok || check {
+				previous = readFile(r.target)
+			}
+			if (info.ok || check) && !previous.ok {
+				r.issue = ToolIssue{code: "LL1000", reason: r.target + ": " + previous.reason}
+			} else if check {
+				r.issue = dependencyVerify(previous.value, r.files)
+			} else {
+				text := dependencyLockText(r.files)
+				var saved IOResult
+				if info.ok {
+					saved = replaceFile(r.target, previous.value, text)
+				} else {
+					saved = writeNewFile(r.target, text)
+				}
+				if !saved.ok {
+					r.issue = ToolIssue{code: "LL1000", reason: r.target + ": " + saved.reason}
+				}
+			}
+		}
+	}
+	dependencyReport(r, check, json)
+}

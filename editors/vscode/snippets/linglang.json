@@ -12,7 +12,7 @@
   "Test": {
     "prefix": "test",
     "body": [
-      "func Test${1:Bean}() {",
+      "func Test${1:Example}() {",
       "\tassert(${2:true})",
       "\t$0",
       "}"
@@ -29,7 +29,7 @@
   "Struct": {
     "prefix": "struct",
     "body": [
-      "type ${1:Bean} struct {",
+      "type ${1:Record} struct {",
       "\t${2:value} ${3:int}",
       "}"
     ]

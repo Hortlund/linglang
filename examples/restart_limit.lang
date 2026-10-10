@@ -1,0 +1,40 @@
+package main
+
+type WorkerStarted struct{ worker Pid }
+
+func worker(parent Pid) {
+	println("worker started")
+	send(parent, WorkerStarted{worker: self()})
+	// Wait for acknowledgement so the parent observes every attempt.
+	receive[bool](-1)
+	panic("simulated worker failure")
+}
+
+func supervisorOwner(parent Pid) {
+	supervisor := startSupervisor(2, 5)
+	child := supervise(supervisor, "worker", worker, parent, ChildOptions{restart: "permanent"})
+	if !child.ok {
+		panic(child.reason)
+	}
+	receive[bool](-1)
+}
+
+func main() {
+	supervision := spawnMonitor(supervisorOwner, self())
+	// The initial worker plus two restarts exhausts the restart budget.
+	for i := 0; i < 3; i++ {
+		started := receive[WorkerStarted](5000)
+		if !started.ok {
+			panic("worker start notification timed out")
+		}
+		send(started.value.worker, true)
+	}
+	exit := wait(supervision.monitor, 5000)
+	if !exit.ok || exit.normal || exit.reason != "shutdown" {
+		panic("supervisor did not shut down after reaching the restart limit")
+	}
+	if receive[WorkerStarted](0).ok {
+		panic("worker restarted beyond the restart limit")
+	}
+	println("restart limit reached")
+}

@@ -60,7 +60,7 @@ func TestPackCLI(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := []string{"linglang_cli.beam", "linglang_program.beam", "linglang_rt.beam", "linglang_sup.beam"}
+		want := []string{"linglang_cli.beam", "linglang_program.beam", "linglang_rt.beam", "linglang_sup.beam", "linglang_server.beam", "linglang_io.beam"}
 		if len(reader.File) != len(want) {
 			t.Fatalf("unexpected archive contents: %+v", reader.File)
 		}

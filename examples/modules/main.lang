@@ -1,0 +1,5 @@
+package main
+
+import "./math"
+
+func main() { println(math.Answer().value, get(math.Scores(), math.Key).value) }

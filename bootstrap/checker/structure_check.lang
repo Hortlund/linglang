@@ -14,7 +14,7 @@ func validateStruct(c *Checker, id int, at Token) {
 		t := checkedType(c, visit.typeID)
 		if visit.exit {
 			states = put(states, visit.typeID, 2)
-		} else if t.kind == "struct" || t.kind == "delivery" {
+		} else if t.kind == "struct" || t.kind == "delivery" || t.kind == "callresult" {
 			state := get(states, visit.typeID).value
 			if state == 1 {
 				checkFail(c, at, "recursive struct requires indirection")
@@ -24,7 +24,7 @@ func validateStruct(c *Checker, id int, at Token) {
 				for _, field := range t.fields {
 					pending = prepend(TypeVisit{typeID: field.typeID}, pending)
 				}
-				if t.kind == "delivery" {
+				if t.kind == "delivery" || t.kind == "callresult" {
 					pending = prepend(TypeVisit{typeID: t.elem}, pending)
 				}
 			}
@@ -51,7 +51,7 @@ func comparableType(c *Checker, id int) bool {
 				pending = prepend(field.typeID, pending)
 			}
 		}
-		if t.kind == "delivery" {
+		if t.kind == "delivery" || t.kind == "callresult" {
 			pending = prepend(t.elem, pending)
 		}
 	}

@@ -95,8 +95,6 @@ func TestEmitterBoundaries() {
 		"func main(){n:=30;println(('a'<<n)+1)}",
 		"func main(){n:=30;_ = 'a'<<n}",
 		"func main(){n:=30;panic('a'<<n)}",
-
-		"func main(){if x:=1;x>0{println(x)}}",
 		"type N struct{x Map[string,int]};func main(){println(new(N))}",
 		"type N struct{x int};func main(){println(new(N))}",
 		"type N struct{x int};func main(){println(N{1})}",
@@ -270,4 +268,17 @@ func TestEmitterReferenceTypes() {
 		}
 	}
 	assert(count == 3 && emitReferences(&e, tInvalid))
+}
+
+func TestEmitterIfInitializers() {
+	for _, source := range (List[string]{
+		"func main(){if n:=1;n>0{println(n)}else{println(n)}}",
+		"func f()*int{if n:=4;n>0{return &n};return nil};func main(){println(*f())}",
+		"func main(){x:=9;if x:=1;x>2{println(x)}else if y:=x+1;y==2{println(x,y)};println(x)}",
+	}) {
+		parsed := parse("if-init.lang", "package main\n"+source)
+		assert(parsed.ok)
+		assert(emitPackage(List[SyntaxNode]{parsed.root}).ok)
+		assert(emitPackageWithOptions(List[SyntaxNode]{parsed.root}, true).ok)
+	}
 }

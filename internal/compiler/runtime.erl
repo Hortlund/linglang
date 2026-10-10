@@ -7,13 +7,14 @@
          list_tail/1, list_first/1, list_more/1, list_range/4,
          map_length/1, map_get/3, map_put/3, map_remove/2,
          read_file/1, write_file/2, text_split/2, text_trim/1,
-         source_files/1, build_program/5, run_program/4, bootstrap_main/3, bootstrap_run_main/4,
+         source_files/1, module_files/1, monotonic_millis/0, module_path/2, test_files/1, run_test_program/5, run_test_program_result/6, tool_report/2, build_program/5, run_program/4, bootstrap_main/3, bootstrap_run_main/4,
          parse_int/1, format_int/1, arguments/0, set_arguments/1, assert_value/3,
          text_byte/2, text_slice/3, text_join/2, text_rune/2, unicode_letter/1, unicode_digit/1,
          scope/1, keep/1, roots/1, safepoint/0, collect/0, stats/0, set_gc_stress/1,
          spawn_process/4, send_message/3, receive_message/3,
          send_after/4, cancel_timer/1,
          monitor_process/1, wait_process/2, demonitor_process/1,
+         timeout/1, exit_reason/1, server_state/1, server_finish/0,
          validate_message/2, gc_stress/0, run_worker/3, finish_process/0]).
 
 %% Messages are immutable value snapshots, selected by their complete static
@@ -104,6 +105,19 @@ spawn_process(Worker, Arg, Schema, Monitored) ->
             #{field_706964 => Pid, field_6d6f6e69746f72 => register_monitor(Pid, Ref)}
     end.
 
+%% A gen_server callback returns to OTP between requests. Keep its state in
+%% one persistent root frame; ordinary generated functions add temporary frames.
+%% Server state is sendable and therefore contains no managed pointers. Root
+%% the cell itself without scanning its contents on every request collection.
+server_state(Value) ->
+    [] = state(frames, []),
+    put({linglang_gc, frames}, [[]]),
+    new(Value, false).
+
+server_finish() ->
+    put({linglang_gc, frames}, []),
+    finish_process().
+
 gc_stress() -> state(stress, false).
 
 run_worker(Worker, Arg, Stress) ->
@@ -117,7 +131,7 @@ run_worker(Worker, Arg, Stress) ->
 %% Untrappable exits use OTP links instead; the owning BEAM process is reclaimed.
 finish_process() ->
     try linglang_sup:finish()
-    after collect()
+    after linglang_io:finish(), collect()
     end.
 
 monitor_process(Pid) when is_pid(Pid) ->
@@ -338,26 +352,43 @@ write_file(Path, Text) ->
 
 %% The bootstrap driver owns language parsing/checking. These narrow bridges
 %% discover package files and compile/package its already emitted Erlang.
-source_files(Paths) ->
+monotonic_millis() -> erlang:monotonic_time(millisecond).
+
+module_path(File, Relative) ->
+    %% Lexically canonical identities keep ../ cycles and shared imports stable.
+    Parts = filename:split(filename:absname(filename:join(filename:dirname(File), Relative))),
+    Normal = lists:foldl(fun
+        (<<".">>, Acc) -> Acc;
+        (<<"..">>, [<<"/">>] = Acc) -> Acc;
+        (<<"..">>, [_ | Rest]) -> Rest;
+        (Part, Acc) -> [Part | Acc]
+    end, [], Parts),
+    filename:join(lists:reverse(Normal)).
+
+source_files(Paths) -> source_files(Paths, false, false).
+module_files(Path) -> source_files([Path], false, true).
+test_files(Paths) -> source_files(Paths, true, false).
+source_files(Paths, Tests, DirectoryOnly) ->
     try
-        Files = lists:append([package_files(Path) || Path <- list_items(Paths)]),
+        Files = lists:append([package_files(Path, Tests, DirectoryOnly) || Path <- list_items(Paths)]),
         value_result(Files, true, <<>>)
     catch throw:{bootstrap_error, Reason} -> value_result([], false, Reason)
     end.
 
-package_files(Path) ->
+package_files(Path, Tests, DirectoryOnly) ->
     case file:read_file_info(Path) of
         {ok, #file_info{type = directory}} ->
             Names = [unicode:characters_to_binary(Name) || Name <- require_io(file:list_dir(Path))],
             Files = [filename:join(Path, Name) || Name <- lists:sort(Names),
                      filename:extension(Name) =:= <<".lang">>,
-                     not lists:suffix("_test.lang", binary_to_list(Name)),
+                     (Tests orelse not lists:suffix("_test.lang", binary_to_list(Name))),
                      not filelib:is_dir(filename:join(Path, Name))],
             case Files of
                 [] -> bootstrap_error(<<Path/binary, ": no .lang source files">>);
                 _ -> lists:foreach(fun regular_source/1, Files), Files
             end;
-        {ok, _} -> [Path];
+        {ok, _} when not DirectoryOnly -> [Path];
+        {ok, _} -> bootstrap_error(<<Path/binary, ": imports require a package directory">>);
         {error, Reason} -> bootstrap_error(<<Path/binary, ": ", (atom_to_binary(Reason))/binary>>)
     end.
 
@@ -389,10 +420,13 @@ build_program(Source, Path, Inputs, Stress, Stats, OwnedRun) ->
         Runtime = [begin
             {Module, Binary, _} = code:get_object_code(Module),
             {atom_to_list(Module) ++ ".beam", Binary}
-        end || Module <- [linglang_rt, linglang_sup]],
+        end || Module <- [linglang_rt, linglang_sup, linglang_server, linglang_io]],
         Entries = [{"linglang_cli.beam", CLI}, {"linglang_program.beam", Beam} | Runtime],
         {_, Archive} = require_io(zip:create("program.zip", Entries, [memory])),
-        Executable = <<"#!/usr/bin/env escript\n%% Generated by linglang bootstrap.\n%%! +S 1 -escript main linglang_cli\n", Archive/binary>>,
+        %% Application VMs use OTP's scheduler defaults (or the operator's
+        %% ERL_FLAGS/ERL_AFLAGS). A compiler benchmark's single-scheduler policy
+        %% must not silently restrict every deployed program to one core.
+        Executable = <<"#!/usr/bin/env escript\n%% Generated by linglang bootstrap.\n%%! -escript main linglang_cli\n", Archive/binary>>,
         publish_executable(Path, Executable),
         io_result(true, <<>>)
     catch throw:{bootstrap_error, Reason} -> io_result(false, Reason)
@@ -459,7 +493,31 @@ open_executable_temp(Directory) ->
 
 %% A separate VM avoids replacing the compiler's own linglang_program module,
 %% and gives programs independent managed cells, arguments and OTP lifetimes.
-run_program(Source, Args, Stress, Stats) ->
+run_program(Source, Args, Stress, Stats) -> run_program(Source, Args, Stress, Stats, infinity).
+
+run_test_program(Source, Args, Stress, Stats, Milliseconds)
+  when is_integer(Milliseconds), Milliseconds > 0, Milliseconds =< 2147483647 ->
+    run_program(Source, Args, Stress, Stats, Milliseconds).
+
+run_program(Source, Args, Stress, Stats, Timeout) ->
+    Result = run_program_result(Source, Args, Stress, Stats, Timeout, false),
+    io_result(maps:get(field_6f6b, Result), maps:get(field_726561736f6e, Result)).
+
+%% These bridges handle process IO/lifetime only; report contents and test
+%% discovery remain implemented in the Linglang driver.
+tool_report(Report, Success) ->
+    ok = io:put_chars([Report, <<"\n">>]),
+    case Success of true -> unit; false -> erlang:error(linglang_reported_failure) end.
+
+run_test_program_result(Source, Args, Stress, Stats, Milliseconds, StderrOutput)
+  when is_integer(Milliseconds), Milliseconds > 0, Milliseconds =< 2147483647,
+       is_boolean(StderrOutput) ->
+    run_program_result(Source, Args, Stress, Stats, Milliseconds, StderrOutput).
+
+run_result(OK, TimedOut, Reason) ->
+    #{field_6f6b => OK, field_74696d65644f7574 => TimedOut, field_726561736f6e => Reason}.
+
+run_program_result(Source, Args, Stress, Stats, Timeout, StderrOutput) ->
     try
         Dir = temporary_directory(),
         Path = filename:join(Dir, <<"program">>),
@@ -474,18 +532,33 @@ run_program(Source, Args, Stress, Stats) ->
                     %% Keep stdio inherited and reserve fd 3/4 for lifetime.
                     %% Closing the port (including compiler death) sends EOF to
                     %% the child guard even when user code never performs IO.
-                    Port = open_port({spawn_executable, Escript}, [binary, exit_status, nouse_stdio,
-                        {args, [unicode:characters_to_list(Path) | [unicode:characters_to_list(A) || A <- list_items(Args)]]}]),
-                    Status = try program_status(Port)
+                    Arguments = [unicode:characters_to_list(Path) | [unicode:characters_to_list(A) || A <- list_items(Args)]],
+                    {Executable, LaunchArgs} = case StderrOutput of
+                        false -> {Escript, Arguments};
+                        true ->
+                            %% Fixed shell program; all untrusted values are argv,
+                            %% never shell source. exec preserves fd 3/4 lifetime.
+                            %% Redirect at the descriptor level, including direct
+                            %% writes to /dev/stdout, without buffering test output.
+                            case filelib:is_regular("/bin/sh") of
+                                true -> {"/bin/sh", ["-c", "exec \"$@\" 1>&2", "linglang-test", Escript | Arguments]};
+                                false -> bootstrap_error(<<"JSON test output requires /bin/sh (Linux/macOS)">>)
+                            end
+                    end,
+                    Port = try open_port({spawn_executable, Executable}, [binary, exit_status, nouse_stdio,
+                        {args, LaunchArgs}])
+                    catch error:StartReason -> bootstrap_error(iolist_to_binary(io_lib:format("cannot start program: ~tp", [StartReason]))) end,
+                    Status = try program_status(Port, Timeout)
                              after try erlang:port_close(Port) catch _:_ -> ok end end,
                     case Status of
-                        0 -> io_result(true, <<>>);
-                        _ -> io_result(false, iolist_to_binary(io_lib:format("program exited with status ~p", [Status])))
+                        0 -> run_result(true, false, <<>>);
+                        timeout -> run_result(false, true, <<"timeout">>);
+                        _ -> run_result(false, false, iolist_to_binary(io_lib:format("program exited with status ~p", [Status])))
                     end
             end
         after file:delete(Path), file:del_dir(Dir)
         end
-    catch throw:{bootstrap_error, Error} -> io_result(false, Error)
+    catch throw:{bootstrap_error, Error} -> run_result(false, false, Error)
     end.
 
 temporary_directory() ->
@@ -499,10 +572,10 @@ temporary_directory() ->
     require_io(file:make_dir(Dir)),
     Dir.
 
-program_status(Port) ->
-    receive
-        {Port, {data, _}} -> program_status(Port);
-        {Port, {exit_status, Status}} -> Status
+program_status(Port, Timeout) ->
+    %% nouse_stdio reserves this port for lifetime, never program output.
+    receive {Port, {exit_status, Status}} -> Status
+    after Timeout -> timeout
     end.
 
 bootstrap_main(Args, Stress, ShowStats) ->
@@ -519,6 +592,7 @@ bootstrap_main(Args, Stress, ShowStats, Guard, Path) ->
         set_gc_stress(Stress),
         Status = try linglang_program:main() of _ -> 0
         catch
+            error:linglang_reported_failure -> 1;
             error:{linglang_panic, Reason} -> io:format(standard_error, "~ts~n", [Reason]), 1;
             error:{linglang_assertion, File, Line} ->
                 io:format(standard_error, "~ts:~p: assertion failed~n", [File, Line]), 1;

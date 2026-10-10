@@ -1,0 +1,258 @@
+package main
+
+// Small strict JSON reader shared by developer protocols. Numbers retain their
+// spelling; consumers choose their numeric range. Objects reject duplicate keys.
+type JSONValue struct {
+	kind    string
+	text    string
+	items   List[JSONValue]
+	keys    List[string]
+	members Map[string, JSONValue]
+}
+type JSONReader struct {
+	source string
+	offset int
+	reason string
+}
+type JSONResult struct {
+	value  JSONValue
+	ok     bool
+	reason string
+	offset int
+}
+
+func jsonFail(r *JSONReader, reason string) {
+	if r.reason == "" {
+		r.reason = reason
+	}
+}
+func jsonByte(r *JSONReader) int {
+	if r.offset >= len(r.source) {
+		return -1
+	}
+	return byteAt(r.source, r.offset)
+}
+func jsonSpace(r *JSONReader) {
+	for jsonByte(r) == 32 || jsonByte(r) == 9 || jsonByte(r) == 10 || jsonByte(r) == 13 {
+		r.offset++
+	}
+}
+func jsonTake(r *JSONReader, b int) bool {
+	jsonSpace(r)
+	if jsonByte(r) != b {
+		return false
+	}
+	r.offset++
+	return true
+}
+func jsonHex(r *JSONReader) int {
+	n := 0
+	for i := 0; i < 4; i++ {
+		b := jsonByte(r)
+		v := -1
+		if b >= 48 && b <= 57 {
+			v = b - 48
+		}
+		if b >= 65 && b <= 70 {
+			v = b - 55
+		}
+		if b >= 97 && b <= 102 {
+			v = b - 87
+		}
+		if v < 0 {
+			jsonFail(r, "invalid Unicode escape")
+			return 0
+		}
+		n = n*16 + v
+		r.offset++
+	}
+	return n
+}
+func jsonTextOrder(reversed List[string]) string {
+	var parts List[string]
+	for _, part := range reversed {
+		parts = prepend(part, parts)
+	}
+	return join(parts, "")
+}
+func jsonItemsOrder(reversed List[JSONValue]) List[JSONValue] {
+	var items List[JSONValue]
+	for _, item := range reversed {
+		items = prepend(item, items)
+	}
+	return items
+}
+
+func jsonString(r *JSONReader) string {
+	if !jsonTake(r, 34) {
+		jsonFail(r, "expected JSON string")
+		return ""
+	}
+	var parts List[string]
+	for r.reason == "" {
+		b := jsonByte(r)
+		if b == 34 {
+			r.offset++
+			return jsonTextOrder(parts)
+		}
+		if b < 32 {
+			jsonFail(r, "unterminated string or unescaped control byte")
+			break
+		}
+		if b != 92 {
+			v := runeAt(r.source, r.offset)
+			if !v.ok {
+				jsonFail(r, "invalid UTF-8 in string")
+				break
+			}
+			parts = prepend(slice(r.source, r.offset, r.offset+v.width), parts)
+			r.offset += v.width
+			continue
+		}
+		r.offset++
+		b = jsonByte(r)
+		r.offset++
+		switch b {
+		case 34, 47, 92:
+			parts = prepend(constantByte(b), parts)
+		case 98:
+			parts = prepend("\b", parts)
+		case 102:
+			parts = prepend("\f", parts)
+		case 110:
+			parts = prepend("\n", parts)
+		case 114:
+			parts = prepend("\r", parts)
+		case 116:
+			parts = prepend("\t", parts)
+		case 117:
+			v := jsonHex(r)
+			if v >= 55296 && v <= 56319 {
+				if jsonByte(r) != 92 {
+					jsonFail(r, "missing low surrogate")
+					break
+				}
+				r.offset++
+				if jsonByte(r) != 117 {
+					jsonFail(r, "missing low surrogate")
+					break
+				}
+				r.offset++
+				low := jsonHex(r)
+				if low < 56320 || low > 57343 {
+					jsonFail(r, "invalid low surrogate")
+					break
+				}
+				v = 65536 + (v-55296)*1024 + low - 56320
+			} else if v >= 56320 && v <= 57343 {
+				jsonFail(r, "unpaired low surrogate")
+				break
+			}
+			parts = prepend(constantRune(v), parts)
+		default:
+			jsonFail(r, "invalid string escape")
+		}
+	}
+	return ""
+}
+func jsonDigits(r *JSONReader) int {
+	start := r.offset
+	for jsonByte(r) >= 48 && jsonByte(r) <= 57 {
+		r.offset++
+	}
+	return r.offset - start
+}
+func jsonValue(r *JSONReader, depth int) JSONValue {
+	jsonSpace(r)
+	if depth > 64 {
+		jsonFail(r, "JSON nesting exceeds 64")
+		return JSONValue{}
+	}
+	b := jsonByte(r)
+	if b == 34 {
+		return JSONValue{kind: "string", text: jsonString(r)}
+	}
+	if b == 123 || b == 91 {
+		r.offset++
+		v := JSONValue{kind: "array"}
+		end := 93
+		if b == 123 {
+			v.kind = "object"
+			end = 125
+		}
+		if jsonTake(r, end) {
+			return v
+		}
+		for r.reason == "" {
+			if b == 123 {
+				key := jsonString(r)
+				if get(v.members, key).ok {
+					jsonFail(r, "duplicate object key")
+				}
+				if !jsonTake(r, 58) {
+					jsonFail(r, "expected colon")
+				}
+				if r.reason != "" {
+					break
+				}
+				item := jsonValue(r, depth+1)
+				v.keys = append(v.keys, key)
+				v.members = put(v.members, key, item)
+			} else {
+				v.items = prepend(jsonValue(r, depth+1), v.items)
+			}
+			if jsonTake(r, end) {
+				v.items = jsonItemsOrder(v.items)
+				return v
+			}
+			if !jsonTake(r, 44) {
+				jsonFail(r, "expected comma or closing delimiter")
+			}
+		}
+		return v
+	}
+	for _, word := range (List[string]{"true", "false", "null"}) {
+		if r.offset+len(word) <= len(r.source) && slice(r.source, r.offset, r.offset+len(word)) == word {
+			r.offset += len(word)
+			kind := "bool"
+			if word == "null" {
+				kind = "null"
+			}
+			return JSONValue{kind: kind, text: word}
+		}
+	}
+	start := r.offset
+	if b == 45 {
+		r.offset++
+	}
+	if jsonByte(r) == 48 {
+		r.offset++
+	} else if jsonDigits(r) == 0 {
+		jsonFail(r, "expected JSON value")
+	}
+	if jsonByte(r) == 46 {
+		r.offset++
+		if jsonDigits(r) == 0 {
+			jsonFail(r, "expected fraction digits")
+		}
+	}
+	if jsonByte(r) == 101 || jsonByte(r) == 69 {
+		r.offset++
+		if jsonByte(r) == 43 || jsonByte(r) == 45 {
+			r.offset++
+		}
+		if jsonDigits(r) == 0 {
+			jsonFail(r, "expected exponent digits")
+		}
+	}
+	return JSONValue{kind: "number", text: slice(r.source, start, r.offset)}
+}
+func parseJSON(source string) JSONResult {
+	r := JSONReader{source: source}
+	v := jsonValue(&r, 0)
+	jsonSpace(&r)
+	if r.offset != len(source) {
+		jsonFail(&r, "trailing JSON data")
+	}
+	return JSONResult{value: v, ok: r.reason == "", reason: r.reason, offset: r.offset}
+}

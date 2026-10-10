@@ -1,0 +1,97 @@
+package http
+
+// A deliberately small HTTP/1.1 subset: one request per connection, no request
+// bodies, chunking, upgrades or keep-alive. Useful for local control endpoints.
+type Request struct {
+	method string
+	path   string
+	ok     bool
+	reason string
+}
+
+func lower(text string) string {
+	upper := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	lowercase := "abcdefghijklmnopqrstuvwxyz"
+	result := ""
+	for i := 0; i < len(text); i++ {
+		part := slice(text, i, i+1)
+		for j := 0; j < 26; j++ {
+			if part == slice(upper, j, j+1) {
+				part = slice(lowercase, j, j+1)
+				break
+			}
+		}
+		result += part
+	}
+	return result
+}
+
+func Read(socket Socket, timeout int) Request {
+	if timeout <= 0 {
+		return Request{reason: "positive timeout required"}
+	}
+	deadline := monotonicMillis() + timeout
+	header := ""
+	for len(header) < 8192 {
+		remaining := deadline - monotonicMillis()
+		if remaining <= 0 {
+			return Request{reason: "timeout"}
+		}
+		part := tcpRead(socket, 1, remaining)
+		if !part.ok {
+			return Request{reason: part.reason}
+		}
+		header += part.value
+		if len(header) >= 4 && slice(header, len(header)-4, len(header)) == "\r\n\r\n" {
+			break
+		}
+	}
+	if len(header) < 4 || slice(header, len(header)-4, len(header)) != "\r\n\r\n" {
+		return Request{reason: "headers exceed 8 KiB"}
+	}
+	lines := split(slice(header, 0, len(header)-4), "\r\n")
+	request := split(head(lines).value, " ")
+	if len(request) != 3 {
+		return Request{reason: "invalid request line"}
+	}
+	method := head(request).value
+	path := head(tail(request)).value
+	if head(tail(tail(request))).value != "HTTP/1.1" || len(path) == 0 || byteAt(path, 0) != 47 {
+		return Request{reason: "expected HTTP/1.1 origin-form request"}
+	}
+	hosts := 0
+	lengths := 0
+	for _, line := range tail(lines) {
+		parts := split(line, ":")
+		name := lower(trim(head(parts).value))
+		if len(parts) < 2 || name == "" {
+			return Request{reason: "invalid header"}
+		}
+		if name == "host" {
+			hosts++
+			if trim(join(tail(parts), ":")) == "" {
+				return Request{reason: "empty Host"}
+			}
+		}
+		if name == "transfer-encoding" || name == "expect" || name == "upgrade" {
+			return Request{reason: "unsupported request framing"}
+		}
+		if name == "content-length" {
+			lengths++
+			if trim(join(tail(parts), ":")) != "0" || lengths > 1 {
+				return Request{reason: "request bodies are unsupported"}
+			}
+		}
+	}
+	if hosts != 1 {
+		return Request{reason: "exactly one Host is required"}
+	}
+	return Request{method: method, path: path, ok: true}
+}
+
+func Write(socket Socket, status int, contentType string, body string, timeout int) IOResult {
+	if len(split(contentType, "\r")) != 1 || len(split(contentType, "\n")) != 1 {
+		return IOResult{reason: "invalid content type"}
+	}
+	return tcpWrite(socket, "HTTP/1.1 "+formatInt(status)+" Response\r\nConnection: close\r\nContent-Type: "+contentType+"\r\nContent-Length: "+formatInt(len(body))+"\r\n\r\n"+body, timeout)
+}

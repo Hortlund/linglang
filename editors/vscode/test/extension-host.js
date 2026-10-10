@@ -19,7 +19,7 @@ async function runEditorTests() {
     const marker = path.join(dir, '.linglang-standalone');
     await fs.writeFile(marker, '');
     await fs.writeFile(path.join(dir, 'unrelated.lang'), 'package main\nfunc main(){}\n');
-    await fs.writeFile(uri.fsPath, 'package main\r\ntype Bean struct{n int}\r\nfunc main(){println("雪😀",missing)}\r\n');
+    await fs.writeFile(uri.fsPath, 'package main\r\ntype Record struct{n int}\r\nfunc main(){println("雪😀",missing)}\r\n');
     const doc = await vscode.workspace.openTextDocument(uri);
     assert.equal(doc.languageId, 'linglang');
     await vscode.extensions.getExtension('linglang.linglang').activate();
@@ -29,7 +29,7 @@ async function runEditorTests() {
     assert.equal(issue.range.start.line, 2);
     assert.equal(issue.range.start.character, doc.lineAt(2).text.indexOf('missing'));
     const symbols = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', uri);
-    assert.ok(symbols.some(s => s.name === 'Bean' && s.children.some(c => c.name === 'n')));
+    assert.ok(symbols.some(s => s.name === 'Record' && s.children.some(c => c.name === 'n')));
     assert.ok(symbols.some(s => s.name === 'main'));
     const edits = await vscode.commands.executeCommand('vscode.executeFormatDocumentProvider', uri, { tabSize: 4, insertSpaces: false });
     assert.ok(edits.length > 0);

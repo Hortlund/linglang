@@ -1,0 +1,5 @@
+package main
+
+import numbers "./math"
+
+func TestAnswer() { assert(numbers.Answer().value == 42) }

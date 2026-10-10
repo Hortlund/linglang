@@ -1,0 +1,8 @@
+package main
+
+func TestToolJSONEscaping() {
+	assert(toolQuote("\"\\\n\r\t\x00雪") == "\"\\\"\\\\\\u000a\\u000d\\u0009\\u0000雪\"")
+	assert(toolQuote(slice("雪", 0, 1)) == "\"\\ufffd\"")
+	assert(toolQuote("") == "\"\"")
+	assert(toolLocation(Token{}) == "null")
+}

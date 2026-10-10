@@ -176,7 +176,7 @@ func TestDirectoryCLI(t *testing.T) {
 		if err != nil || !strings.Contains(stdout, "Built BEAM modules in "+buildDir) {
 			t.Fatalf("directory build: %v\n%s\n%s", err, stdout, stderr)
 		}
-		for _, module := range []string{"linglang_program.beam", "linglang_rt.beam", "linglang_sup.beam"} {
+		for _, module := range []string{"linglang_program.beam", "linglang_rt.beam", "linglang_sup.beam", "linglang_server.beam", "linglang_io.beam"} {
 			if _, err := os.Stat(filepath.Join(buildDir, module)); err != nil {
 				t.Fatal(err)
 			}

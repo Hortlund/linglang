@@ -1,0 +1,13 @@
+package main
+
+func main() {
+	supervisor := startSupervisor(3, 5)
+	counter := superviseServer(supervisor, "counter", add, 0, ChildOptions{})
+	assert(counter.ok)
+	if result := call[int](counter.pid, 5, 1000); result.ok {
+		println("Counter:", result.value)
+	} else {
+		panic(result.reason)
+	}
+	assert(stopSupervisor(supervisor))
+}

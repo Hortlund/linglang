@@ -1,12 +1,12 @@
 package main
 
-func TestBeanMath() {
-	assert(moreBeans(1) == 2)
+func TestIncrement() {
+	assert(increment(1) == 2)
 }
 
-func TestBeanGetsBackUp() {
+func TestWorkerRestart() {
 	supervisor := startSupervisor(3, 5)
-	child := supervise(supervisor, "bean", beanWorker, self(), ChildOptions{})
+	child := supervise(supervisor, "worker", restartingWorker, self(), ChildOptions{})
 	assert(child.ok)
 	first := receive[Ready](5000)
 	assert(first.ok)

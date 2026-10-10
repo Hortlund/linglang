@@ -222,12 +222,12 @@ func compositeExpression(c *Checker, scope *TypeScope, node SyntaxNode, expected
 		fieldID = t.elem
 		t = checkedType(c, t.elem)
 	}
-	if t.kind != "struct" && t.kind != "list" && t.kind != "map" && t.kind != "delivery" {
+	if t.kind != "struct" && t.kind != "list" && t.kind != "map" && t.kind != "delivery" && t.kind != "callresult" {
 		checkFail(c, node.at, "expected a composite type")
 	}
 	fields := t.fields
-	if t.kind == "delivery" {
-		fields = List[CheckedField]{CheckedField{name: "value", typeID: t.elem}, CheckedField{name: "ok", typeID: tBool}}
+	if t.kind == "delivery" || t.kind == "callresult" {
+		fields = resultFields(t)
 	}
 	position := 0
 	var seenElements Map[string, bool]
@@ -237,7 +237,7 @@ func compositeExpression(c *Checker, scope *TypeScope, node SyntaxNode, expected
 	for _, element := range tail(node.children) {
 		valueNode := element
 		valueType := t.elem
-		if t.kind == "struct" || t.kind == "delivery" {
+		if t.kind == "struct" || t.kind == "delivery" || t.kind == "callresult" {
 			currentStyle := "positional"
 			if element.kind == "KeyValueExpr" {
 				currentStyle = "keyed"
@@ -343,6 +343,9 @@ func callExpression(c *Checker, scope *TypeScope, node SyntaxNode) CheckedValue 
 		}
 		if parenthesized && len(explicit) == 0 && (name == "head" || name == "tail" || name == "prepend" || name == "get" || name == "put" || name == "remove" || name == "send" || name == "sendAfter" || name == "spawn" || name == "spawnMonitor" || name == "supervise") {
 			checkFail(c, callee.at, "generic function needs instantiation inside parentheses")
+		}
+		if parenthesized && ((name == "call" && len(explicit) != 2) || (name == "superviseServer" && len(explicit) != 3)) {
+			checkFail(c, callee.at, "parenthesized server function needs all type arguments")
 		}
 		if parenthesized && (name == "get" || name == "put" || name == "remove") && len(explicit) < 2 {
 			checkFail(c, callee.at, "parenthesized Map function needs both type arguments")

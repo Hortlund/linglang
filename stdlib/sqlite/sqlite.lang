@@ -1,0 +1,6 @@
+package sqlite
+
+func Text(value string) SQLValue { return SQLValue{kind: "text", value: value} }
+func Int(value int) SQLValue     { return SQLValue{kind: "int", value: formatInt(value)} }
+func Null() SQLValue             { return SQLValue{kind: "null"} }
+func Blob(value string) SQLValue { return SQLValue{kind: "blob", value: value} }

@@ -18,7 +18,7 @@ func emitRequireType(e *Emitter, id int, at Token) {
 		}
 		seen = put(seen, current, true)
 		t := get(e.checked.types, current).value
-		if t.kind == "pointer" || t.kind == "list" || t.kind == "delivery" {
+		if t.kind == "pointer" || t.kind == "list" || t.kind == "delivery" || t.kind == "callresult" {
 			pending = prepend(t.elem, pending)
 		} else if t.kind == "map" {
 			if t.key != tInt && t.key != tString {
@@ -56,8 +56,8 @@ func emitZero(e *Emitter, id int, at Token) string {
 		return ""
 	}
 	fieldsToEmit := t.fields
-	if t.kind == "delivery" {
-		fieldsToEmit = List[CheckedField]{CheckedField{name: "value", typeID: t.elem}, CheckedField{name: "ok", typeID: tBool}}
+	if t.kind == "delivery" || t.kind == "callresult" {
+		fieldsToEmit = resultFields(t)
 	}
 	var reversed List[string]
 	for _, field := range fieldsToEmit {
@@ -97,7 +97,7 @@ func emitAddress(e *Emitter, node SyntaxNode) string {
 
 func emitStruct(e *Emitter, node SyntaxNode, id int) string {
 	emitRequireType(e, id, node.at)
-	if get(e.checked.types, id).value.kind != "struct" && get(e.checked.types, id).value.kind != "delivery" {
+	if get(e.checked.types, id).value.kind != "struct" && get(e.checked.types, id).value.kind != "delivery" && get(e.checked.types, id).value.kind != "callresult" {
 		emitFail(e, node.at, "bootstrap emitter requires a struct literal")
 		return ""
 	}

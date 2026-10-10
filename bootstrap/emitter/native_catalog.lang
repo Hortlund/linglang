@@ -1,0 +1,149 @@
+package main
+
+// Parameter labels complement the checker's type metadata. The integration
+// tests compare complete signatures and records with the independent seed.
+func nativeParameterNames(name string) string {
+	switch name {
+	case "assert":
+		return "condition"
+	case "buildProgram":
+		return "source path inputs stress stats"
+	case "byteAt":
+		return "text index"
+	case "cancelTimer":
+		return "timer"
+	case "canonicalPath":
+		return "path"
+	case "demonitor":
+		return "watcher"
+	case "formatInt":
+		return "value"
+	case "isDigit":
+		return "value"
+	case "isLetter":
+		return "value"
+	case "join":
+		return "parts separator"
+	case "lookupChild":
+		return "supervisor name"
+	case "makeDirectories":
+		return "path"
+	case "moduleFiles":
+		return "path"
+	case "modulePath":
+		return "file relative"
+	case "monitor":
+		return "pid"
+	case "parseInt":
+		return "text"
+	case "pathInfo":
+		return "path"
+	case "readDirectory":
+		return "path"
+	case "readFile":
+		return "path"
+	case "removeChild":
+		return "supervisor name"
+	case "replaceFile":
+		return "path expected text"
+	case "restartChild":
+		return "supervisor name"
+	case "runProgram":
+		return "source arguments stress stats"
+	case "runTestProgram":
+		return "source arguments stress stats timeout"
+	case "runTestProgramResult":
+		return "source arguments stress stats timeout stderrOutput"
+	case "runeAt":
+		return "text offset"
+	case "sha256":
+		return "text"
+	case "slice":
+		return "text start end"
+	case "sourceFiles":
+		return "paths"
+	case "split":
+		return "text separator"
+	case "sqliteQuery":
+		return "path sql params timeout"
+	case "startSupervisor":
+		return "maxRestarts withinSeconds"
+	case "stopChild":
+		return "supervisor name"
+	case "stopSupervisor":
+		return "supervisor"
+	case "supervisorPid":
+		return "supervisor"
+	case "tcpAccept":
+		return "socket timeout"
+	case "tcpClose":
+		return "socket"
+	case "tcpConnect":
+		return "host port timeout"
+	case "tcpListen":
+		return "host port"
+	case "tcpPort":
+		return "socket"
+	case "tcpRead":
+		return "socket size timeout"
+	case "tcpWrite":
+		return "socket data timeout"
+	case "testFiles":
+		return "paths"
+	case "toolReport":
+		return "report success"
+	case "trim":
+		return "text"
+	case "wait":
+		return "watcher timeout"
+	case "writeFile":
+		return "path text"
+	case "writeNewFile":
+		return "path text"
+	}
+	return ""
+}
+
+// Generic intrinsic schemes are implemented procedurally by nativeCall. Keep
+// their public descriptions here; never expose the seed's opaque stand-ins.
+func nativeGenericDeclaration(name string) NativeDeclaration {
+	switch name {
+	case "CallResult":
+		return NativeDeclaration{name: "CallResult", kind: "record", declaration: "type CallResult[T any] struct {\n\tvalue    T\n\tok       bool\n\ttimedOut bool\n\treason   string\n}"}
+	case "Delivery":
+		return NativeDeclaration{name: "Delivery", kind: "record", declaration: "type Delivery[T any] struct {\n\tvalue T\n\tok    bool\n}"}
+	case "List":
+		return NativeDeclaration{name: "List", kind: "collection", declaration: "List[T]"}
+	case "Map":
+		return NativeDeclaration{name: "Map", kind: "collection", declaration: "Map[K, V]"}
+	case "call":
+		return NativeDeclaration{name: "call", kind: "function", declaration: "func call[R, Q any](pid Pid, request Q, timeout int) CallResult[R]"}
+	case "get":
+		return NativeDeclaration{name: "get", kind: "function", declaration: "func get[K comparable, V any](items Map[K, V], key K) Delivery[V]"}
+	case "head":
+		return NativeDeclaration{name: "head", kind: "function", declaration: "func head[T any](items List[T]) Delivery[T]"}
+	case "prepend":
+		return NativeDeclaration{name: "prepend", kind: "function", declaration: "func prepend[T any](value T, items List[T]) List[T]"}
+	case "put":
+		return NativeDeclaration{name: "put", kind: "function", declaration: "func put[K comparable, V any](items Map[K, V], key K, value V) Map[K, V]"}
+	case "receive":
+		return NativeDeclaration{name: "receive", kind: "function", declaration: "func receive[T any](timeout int) Delivery[T]"}
+	case "remove":
+		return NativeDeclaration{name: "remove", kind: "function", declaration: "func remove[K comparable, V any](items Map[K, V], key K) Map[K, V]"}
+	case "send":
+		return NativeDeclaration{name: "send", kind: "function", declaration: "func send[T any](pid Pid, value T)"}
+	case "sendAfter":
+		return NativeDeclaration{name: "sendAfter", kind: "function", declaration: "func sendAfter[T any](pid Pid, value T, delayMillis int) Timer"}
+	case "spawn":
+		return NativeDeclaration{name: "spawn", kind: "function", declaration: "func spawn[T any](worker func(T), args T) Pid"}
+	case "spawnMonitor":
+		return NativeDeclaration{name: "spawnMonitor", kind: "function", declaration: "func spawnMonitor[T any](worker func(T), args T) Process"}
+	case "supervise":
+		return NativeDeclaration{name: "supervise", kind: "function", declaration: "func supervise[T any](supervisor Supervisor, name string, worker func(T), args T, options ChildOptions) Child"}
+	case "superviseServer":
+		return NativeDeclaration{name: "superviseServer", kind: "function", declaration: "func superviseServer[S, Q, R any](supervisor Supervisor, name string, handler func(*S, Q) R, initial S, options ChildOptions) Child"}
+	case "tail":
+		return NativeDeclaration{name: "tail", kind: "function", declaration: "func tail[T any](items List[T]) List[T]"}
+	}
+	return NativeDeclaration{}
+}

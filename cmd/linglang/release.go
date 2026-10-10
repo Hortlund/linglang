@@ -39,7 +39,7 @@ func release(path, program string, gcStress, gcStats bool) error {
 	if err := buildSources(appDir, files); err != nil {
 		return err
 	}
-	app := "{application, linglang, [{description, \"linglang program\"}, {vsn, \"1\"}, {modules, [linglang_cli, linglang_program, linglang_rt, linglang_sup]}, {registered, []}, {applications, [kernel, stdlib]}]}.\n"
+	app := "{application, linglang, [{description, \"linglang program\"}, {vsn, \"1\"}, {modules, [linglang_cli, linglang_program, linglang_rt, linglang_sup, linglang_server, linglang_io]}, {registered, []}, {applications, [kernel, stdlib]}]}.\n"
 	if err := os.WriteFile(filepath.Join(appDir, "linglang.app"), []byte(app), 0644); err != nil {
 		return err
 	}

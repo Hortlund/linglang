@@ -1,0 +1,42 @@
+package main
+
+func TestJSONReader() {
+	for _, source := range (List[string]{"null", "true", "false", "0", "-12.3e+4", "[]", "{}", "{\"a\":[true,null,-2],\"b\":\"雪\"}"}) {
+		assert(parseJSON(source).ok)
+	}
+	for _, source := range (List[string]{"", "01", "1.", "1e", "--1", "[1,]", "{\"a\":1,}", "{\"a\":1,\"a\":2}", "null false", "\"\\x00\"", "\"\\ud800\"", "\"\\udc00\"", "\"\n\"", "\"\xff\"", "\"\\"}) {
+		assert(!parseJSON(source).ok)
+	}
+	r := parseJSON("\"\\u96ea\\ud83d\\udca1\\/\\b\\f\\n\\r\\t\"")
+	assert(r.ok && r.value.text == "雪💡/\b\f\n\r\t")
+	depth := "0"
+	for i := 0; i < 66; i++ {
+		depth = "[" + depth + "]"
+	}
+	assert(!parseJSON(depth).ok)
+}
+
+func TestDependencyLockProtocol() {
+	files := List[DependencyFile]{DependencyFile{path: "../雪💡/lib.lang", sha256: "abc"}}
+	assert(dependencyVerify(dependencyLockText(files), files).code == "")
+	assert(dependencyVerify("{\"files\":[],\"version\":1}", nil).code == "")
+	assert(dependencyVerify("{\"files\":[],\"version\":1}", files).code == "LL1006")
+	for _, source := range (List[string]{"{}", "{\"version\":2,\"files\":[]}", "{\"version\":1,\"files\":null}", "{\"version\":1,\"files\":[],\"extra\":0}", "{\"version\":1,\"files\":[]} {}", "{\"version\":1,\"files\":[{\"path\":\"a\"}]}"}) {
+		assert(dependencyVerify(source, nil).code == "LL1001")
+	}
+	assert(dependencyRelative("/work/app", "/work/lib/a.lang") == "../lib/a.lang")
+	assert(dependencyRelative("/work/app", "/work/app/lib/a.lang") == "lib/a.lang")
+}
+
+func TestNativeDiscovery() {
+	api := bootstrapNativeAPI()
+	previous := ""
+	var seen Map[string, bool]
+	for _, entry := range api {
+		assert(entry.name > previous && entry.declaration != "")
+		seen = put(seen, entry.name, true)
+		previous = entry.name
+	}
+	assert(get(seen, "sha256").ok && get(seen, "superviseServer").ok && get(seen, "PathInfo").ok)
+	assert(!get(seen, "__linglang_internal").ok)
+}

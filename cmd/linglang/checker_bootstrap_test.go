@@ -21,7 +21,7 @@ func TestBootstrapCheckerAgainstSeed(t *testing.T) {
 		valid   bool
 	}
 	var fixtures []fixture
-	for _, name := range []string{"examples/beans.lang", "examples/prime_lab", "bootstrap/lexer", "bootstrap/parser", "bootstrap/resolver", "bootstrap/checker"} {
+	for _, name := range []string{"examples/worker_registration.lang", "examples/prime_lab", "bootstrap/lexer", "bootstrap/parser", "bootstrap/resolver", "bootstrap/checker"} {
 		path, err := filepath.Abs(filepath.Join("../..", name))
 		if err != nil {
 			t.Fatal(err)
@@ -270,6 +270,48 @@ func TestBootstrapCheckerAgainstSeed(t *testing.T) {
 			t.Fatal(err)
 		}
 		fixtures = append(fixtures, fixture{name: name, sources: []compiler.SourceFile{{Filename: path, Source: source}}})
+	}
+	for i, code := range []string{
+		`func f(){call[int](self(),nil,0)}`,
+		`func f(){call[int](self(),1,0,0)}`,
+		`func f(){call[int,int,int](self(),1,0)}`,
+		`func f(){call[int](1,1,0)}`,
+		`func f(){call[int](self(),1,true)}`,
+		`func f(){call[*int](self(),1,0)}`,
+		`func f(){call[Timer](self(),1,0)}`,
+		`func f(){n:=1;call[int](self(),&n,0)}`,
+		`func f(){(call[int])(self(),1,0)}`,
+		`func f(){call[int,bool](self(),1,0)}`,
+		`func h(s **int,q int)int{return 0};func f(){superviseServer(startSupervisor(3,5),"s",h,nil,ChildOptions{})}`,
+		`func h(s *int,q *int)int{return 0};func f(){superviseServer(startSupervisor(3,5),"s",h,0,ChildOptions{})}`,
+		`func h(s *int,q int)*int{return s};func f(){superviseServer(startSupervisor(3,5),"s",h,0,ChildOptions{})}`,
+		`func h(s int,q int)int{return 0};func f(){superviseServer(startSupervisor(3,5),"s",h,0,ChildOptions{})}`,
+		`func h(s *int,q int){};func f(){superviseServer(startSupervisor(3,5),"s",h,0,ChildOptions{})}`,
+		`func h(s *int,q int)int{return 0};func f(){superviseServer[string](startSupervisor(3,5),"s",h,0,ChildOptions{})}`,
+		`func h(s *int,q int)int{return 0};func f(){superviseServer[int,int,int,int](startSupervisor(3,5),"s",h,0,ChildOptions{})}`,
+		`func h(s *int,q int)int{return 0};func f(){(superviseServer[int])(startSupervisor(3,5),"s",h,0,ChildOptions{})}`,
+		`type Bad struct{x CallResult[Bad]};func f(){var x Bad;println(x)}`,
+	} {
+		name := fmt.Sprintf("server-invalid-%d", i)
+		path := filepath.Join(t.TempDir(), name+".lang")
+		source := []byte("package main\n" + code)
+		if err := os.WriteFile(path, source, 0600); err != nil {
+			t.Fatal(err)
+		}
+		fixtures = append(fixtures, fixture{name: name, sources: []compiler.SourceFile{{Filename: path, Source: source}}})
+	}
+	for i, code := range []string{
+		otpServerFixture,
+		`func h(s *int,q int)int{return 0};func f(){superviseServer[int](startSupervisor(3,5),"s",h,0,ChildOptions{});superviseServer[int,int](startSupervisor(3,5),"s",h,0,ChildOptions{})}`,
+		`func f(){var a CallResult[int];a=call[int](self(),true,0);a=call[int](self(),1,0);println(a==CallResult[int]{})}`,
+	} {
+		name := fmt.Sprintf("server-valid-%d", i)
+		path := filepath.Join(t.TempDir(), name+".lang")
+		source := []byte("package main\n" + code)
+		if err := os.WriteFile(path, source, 0600); err != nil {
+			t.Fatal(err)
+		}
+		fixtures = append(fixtures, fixture{name: name, sources: []compiler.SourceFile{{Filename: path, Source: source}}, valid: true})
 	}
 	// Exercise forward declarations across physical files in deliberately reversed order.
 	dir := t.TempDir()

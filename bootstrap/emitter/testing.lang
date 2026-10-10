@@ -1,0 +1,131 @@
+package main
+
+type BootstrapTest struct {
+	name string
+	at   Token
+}
+
+func textEnds(text string, suffix string) bool {
+	return len(text) >= len(suffix) && slice(text, len(text)-len(suffix), len(text)) == suffix
+}
+
+func bootstrapTestTimeout(text string) int {
+	factor := 1
+	if textEnds(text, "ms") {
+		text = slice(text, 0, len(text)-2)
+	} else if textEnds(text, "s") {
+		text = slice(text, 0, len(text)-1)
+		factor = 1000
+	}
+	n := parseInt(text)
+	if !n.ok || n.value <= 0 || n.value > 2147483647/factor {
+		panic("test timeout must be positive milliseconds or an integer followed by ms/s (maximum 2147483647ms)")
+	}
+	return n.value * factor
+}
+
+type TestDiscovery struct {
+	tests List[BootstrapTest]
+	issue ToolIssue
+}
+
+func bootstrapTests(files List[SyntaxNode]) TestDiscovery {
+	var tests List[BootstrapTest]
+	for _, file := range files {
+		if !textEnds(file.at.filename, "_test.lang") {
+			continue
+		}
+		for _, decl := range tail(file.children) {
+			name := childAt(decl, 0)
+			if decl.kind != "FuncDecl" || len(name.text) < 4 || slice(name.text, 0, 4) != "Test" {
+				continue
+			}
+			if head(childAt(decl, 1).children).ok || head(childAt(decl, 2).children).ok {
+				return TestDiscovery{issue: ToolIssue{code: "LL1004", at: name.at, reason: "test functions must have no parameters or results"}}
+			}
+			var before List[BootstrapTest]
+			rest := tests
+			for head(rest).ok && head(rest).value.name < name.text {
+				before = prepend(head(rest).value, before)
+				rest = tail(rest)
+			}
+			tests = prepend(BootstrapTest{name: name.text, at: name.at}, rest)
+			for _, previous := range before {
+				tests = prepend(previous, tests)
+			}
+		}
+	}
+	return TestDiscovery{tests: tests}
+}
+
+func bootstrapTestEntry(files List[SyntaxNode]) string {
+	var cases List[string]
+	for _, test := range bootstrapTests(files).tests {
+		cases = append(cases, "["+emitBinaryString(test.name)+"] -> "+emitFunctionName(test.name)+"()")
+	}
+	cases = append(cases, "_ -> erlang:error(linglang_unknown_test)")
+	return "case linglang_rt:arguments() of " + join(cases, "; ") + " end"
+}
+
+func bootstrapTest(options BootstrapOptions) {
+	if len(options.paths) != 1 {
+		panic("test expects one source file or directory")
+	}
+	loaded := toolLoad(options)
+	if loaded.issue.code != "" {
+		toolFailure(options, loaded.count, loaded.issue)
+		return
+	}
+	discovery := bootstrapTests(loaded.files)
+	if discovery.issue.code != "" {
+		toolFailure(options, loaded.count, discovery.issue)
+		return
+	}
+	tests := discovery.tests
+	result := emitPackageMode(loaded.files, options.noOpt, true)
+	if !result.ok {
+		toolFailure(options, loaded.count, ToolIssue{code: result.code, at: result.at, reason: result.reason})
+		return
+	}
+	if !head(tests).ok {
+		toolFailure(options, loaded.count, ToolIssue{code: "LL1005", reason: "no Test functions found in _test.lang files"})
+		return
+	}
+	failed := 0
+	if options.json {
+		println(toolEvent("suite_start") + ",\"total\":" + formatInt(len(tests)) + "}")
+	}
+	for _, test := range tests {
+		if options.json {
+			println(toolTestEvent("test_start", test) + "}")
+		} else {
+			println("RUN", test.name)
+		}
+		start := monotonicMillis()
+		ran := runTestProgramResult(result.module, List[string]{test.name}, options.stress, options.stats, options.timeout, options.json)
+		elapsed := monotonicMillis() - start
+		status := "pass"
+		if !ran.ok {
+			failed++
+			status = "fail"
+		}
+		if ran.timedOut {
+			status = "timeout"
+		}
+		if options.json {
+			println(toolTestEvent("test_end", test) + ",\"status\":" + toolQuote(status) + ",\"durationMillis\":" + formatInt(elapsed) + ",\"reason\":" + toolQuote(ran.reason) + "}")
+		} else if ran.ok {
+			println("PASS", test.name)
+		} else {
+			println("FAIL " + test.name + " (" + test.at.filename + ":" + formatInt(test.at.line) + "): " + ran.reason)
+		}
+	}
+	if options.json {
+		toolReport(toolSuiteEnd(len(tests), len(tests)-failed, failed, failed == 0), failed == 0)
+	} else {
+		println("Tests: " + formatInt(len(tests)-failed) + " passed, " + formatInt(failed) + " failed")
+		if failed > 0 {
+			panic("test suite failed")
+		}
+	}
+}

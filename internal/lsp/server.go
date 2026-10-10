@@ -242,7 +242,7 @@ func (s *Server) markDirty(path string) {
 	s.dirty[filepath.Dir(path)] = true
 	physical := physicalPath(path)
 	for dir, paths := range s.dependencies {
-		if paths[physical] {
+		if paths[path] || paths[physical] || paths[filepath.Dir(path)] || paths[filepath.Dir(physical)] {
 			s.dirty[dir] = true
 		}
 	}
@@ -377,6 +377,10 @@ func (s *Server) publishDirty() error {
 						byPath[source.Filename] = []diagnostic{}
 					}
 					analysis := compiler.Analyze(sources)
+					for _, dependency := range analysis.Dependencies {
+						s.dependencies[dir][dependency] = true
+						s.dependencies[dir][physicalPath(dependency)] = true
+					}
 					for _, issue := range analysis.Diagnostics {
 						text, ok := texts[issue.Filename]
 						if !ok {

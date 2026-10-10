@@ -1,0 +1,63 @@
+package main
+
+import "../../stdlib/http"
+
+type Config struct {
+	port     int
+	database string
+}
+
+func serve(config Config) {
+	listener := tcpListen("127.0.0.1", config.port)
+	assert(listener.ok)
+	println("Listening:", tcpPort(listener.value).value)
+	for {
+		client := tcpAccept(listener.value, -1)
+		if !client.ok {
+			panic(client.reason)
+		}
+		request := http.Read(client.value, 3000)
+		if !request.ok {
+			http.Write(client.value, 400, "text/plain", request.reason, 1000)
+		} else if request.path != "/" || (request.method != "GET" && request.method != "POST") {
+			http.Write(client.value, 404, "text/plain", "Not found", 1000)
+		} else {
+			ok := true
+			if request.method == "POST" {
+				updated := sqliteQuery(config.database, "UPDATE counter SET value=value+1 WHERE id=1", nil, 1000)
+				ok = updated.ok
+			}
+			result := sqliteQuery(config.database, "SELECT value FROM counter WHERE id=1", nil, 1000)
+			if !ok || !result.ok {
+				http.Write(client.value, 500, "text/plain", "Database unavailable", 1000)
+			} else {
+				count := head(head(result.rows).value).value.value
+				body := "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Linglang counter</title><h1>Persistent counter</h1><p>Count: " + count + "</p><form method=\"post\" action=\"/\"><button>Add one</button></form><p>Linglang + OTP + SQLite</p></html>"
+				http.Write(client.value, 200, "text/html; charset=utf-8", body, 1000)
+			}
+		}
+		tcpClose(client.value)
+	}
+}
+
+func main() {
+	port := 8080
+	database := "counter.sqlite"
+	if head(args()).ok {
+		parsed := parseInt(head(args()).value)
+		assert(parsed.ok)
+		port = parsed.value
+	}
+	if head(tail(args())).ok {
+		database = head(tail(args())).value
+	}
+	created := sqliteQuery(database, "CREATE TABLE IF NOT EXISTS counter(id INTEGER PRIMARY KEY, value INTEGER NOT NULL)", nil, 1000)
+	if !created.ok {
+		panic(created.reason)
+	}
+	assert(sqliteQuery(database, "INSERT OR IGNORE INTO counter VALUES(1,0)", nil, 1000).ok)
+	supervisor := startSupervisor(3, 5)
+	child := supervise(supervisor, "http", serve, Config{port: port, database: database}, ChildOptions{})
+	assert(child.ok)
+	receive[bool](-1)
+}

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Linglang check report, version 1",
+  "type": "object",
+  "required": ["schemaVersion", "command", "compiler", "mode", "ok", "sourceFiles", "diagnostics"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "command": { "const": "check" },
+    "compiler": { "type": "string" },
+    "mode": { "enum": ["program", "tests"] },
+    "ok": { "type": "boolean" },
+    "sourceFiles": { "type": "integer", "minimum": 0 },
+    "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }
+  },
+  "$defs": {
+    "location": {
+      "type": "object",
+      "required": ["file", "offset", "line", "column"],
+      "properties": {
+        "file": { "type": "string" },
+        "offset": { "type": "integer", "minimum": 0 },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": ["code", "severity", "message", "location", "related"],
+      "properties": {
+        "code": { "type": "string" },
+        "severity": { "const": "error" },
+        "message": { "type": "string" },
+        "location": { "oneOf": [{ "$ref": "#/$defs/location" }, { "type": "null" }] },
+        "related": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["message", "location"],
+            "properties": {
+              "message": { "type": "string" },
+              "location": { "$ref": "#/$defs/location" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

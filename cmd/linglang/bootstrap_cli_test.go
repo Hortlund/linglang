@@ -51,6 +51,12 @@ func TestBootstrapCLI(t *testing.T) {
 			if packingErr != nil {
 				t.Fatalf("package seed compiler: %v\n%s", packingErr, packingOutput)
 			}
+			t.Run("developer_tools", func(t *testing.T) { testBootstrapDeveloperTools(t, cli, env) })
+			t.Run("discovery", func(t *testing.T) { testBootstrapDiscovery(t, cli, env) })
+			t.Run("structured_tooling", func(t *testing.T) { testStructuredDriver(t, cli, env, "bootstrap") })
+			t.Run("typed_io", func(t *testing.T) { testBootstrapIO(t, cli, env) })
+			t.Run("modules", func(t *testing.T) { testBootstrapModules(t, cli, env) })
+			t.Run("test_runner", func(t *testing.T) { testBootstrapRunner(t, cli, env) })
 			t.Run("stdin", func(t *testing.T) {
 				testBootstrapStdin(t, cli, env)
 			})

@@ -4,6 +4,7 @@ package main
 // resolver's call stack, just as the parser and dump handle long expressions.
 func resolveExpression(r *Resolver, scope *Scope, expression SyntaxNode) {
 	pending := List[SyntaxNode]{expression}
+	var literalTypes Map[int, SyntaxNode]
 	for r.reason == "" && head(pending).ok {
 		node := head(pending).value
 		pending = tail(pending)
@@ -17,6 +18,39 @@ func resolveExpression(r *Resolver, scope *Scope, expression SyntaxNode) {
 			r.deferred = prepend(childAt(node, 1).at, r.deferred)
 			pending = prepend(childAt(node, 0), pending)
 			continue
+		case "CompositeLit":
+			typ := childAt(node, 0)
+			if typ.kind == "nil" {
+				typ = get(literalTypes, node.id).value
+			}
+			for typ.kind == "ParenExpr" || typ.kind == "StarExpr" {
+				typ = childAt(typ, 0)
+			}
+			elementType := noSyntax()
+			if typ.kind == "IndexListExpr" && childAt(typ, 0).text == "Map" {
+				elementType = childAt(typ, 2)
+				for _, entry := range tail(node.children) {
+					if entry.kind == "KeyValueExpr" {
+						pending = prepend(childAt(entry, 0), pending)
+					}
+				}
+			}
+			if typ.kind == "IndexExpr" && childAt(typ, 0).text == "List" {
+				elementType = childAt(typ, 1)
+			}
+			// Elided collection values inherit their element type. Their map
+			// keys are lexical references, whereas struct keys remain fields.
+			if elementType.kind != "nil" {
+				for _, entry := range tail(node.children) {
+					value := entry
+					if entry.kind == "KeyValueExpr" {
+						value = childAt(entry, 1)
+					}
+					if value.kind == "CompositeLit" {
+						literalTypes = put(literalTypes, value.id, elementType)
+					}
+				}
+			}
 		case "KeyValueExpr":
 			pending = prepend(childAt(node, 1), pending)
 			key := childAt(node, 0)

@@ -1,0 +1,248 @@
+package main
+
+// Formatting owns whitespace only. The parser supplies block/header/unary roles;
+// tokens retain comments, literal spelling and parentheses. Reparse before any IO.
+type FormatRoles struct {
+	blocks       Map[int, bool]
+	unary        Map[int, bool]
+	headers      Map[int, int]
+	empty        Map[int, bool]
+	declarations Map[int, bool]
+}
+
+type FormatFrame struct {
+	kind   string
+	block  bool
+	group  bool
+	empty  bool
+	inCase bool
+}
+
+type FormatWriter struct {
+	lines  List[string]
+	line   string
+	indent int
+	blank  bool
+}
+
+func formatRoles(root SyntaxNode) FormatRoles {
+	r := FormatRoles{}
+	for _, decl := range tail(root.children) {
+		r.declarations = put(r.declarations, decl.at.offset, true)
+	}
+	pending := List[SyntaxNode]{root}
+	for head(pending).ok {
+		node := head(pending).value
+		pending = tail(pending)
+		switch node.kind {
+		case "BlockStmt":
+			r.blocks = put(r.blocks, node.at.offset, true)
+		case "UnaryExpr", "StarExpr":
+			r.unary = put(r.unary, node.at.offset, true)
+		case "EmptyStmt":
+			r.empty = put(r.empty, node.at.offset, true)
+		case "IfStmt", "SwitchStmt":
+			r.headers = put(r.headers, node.at.offset, childAt(node, 2).at.offset)
+		case "ForStmt":
+			r.headers = put(r.headers, node.at.offset, childAt(node, 3).at.offset)
+		}
+		for _, child := range node.children {
+			pending = prepend(child, pending)
+		}
+	}
+	return r
+}
+
+func formatBreak(w *FormatWriter) {
+	if w.line != "" {
+		w.lines = prepend(w.line+"\n", w.lines)
+		w.line = ""
+		w.blank = false
+	}
+}
+
+func formatBlank(w *FormatWriter) {
+	formatBreak(w)
+	if head(w.lines).ok && !w.blank {
+		w.lines = prepend("\n", w.lines)
+		w.blank = true
+	}
+}
+
+func formatWrite(w *FormatWriter, text string, space bool) {
+	if w.line == "" {
+		for i := 0; i < w.indent; i++ {
+			w.line += "\t"
+		}
+	} else if space {
+		w.line += " "
+	}
+	w.line += text
+}
+
+func formatSpace(previous Token, current Token, unary Map[int, bool], block bool) bool {
+	p := previous.kind
+	k := current.kind
+	if p == "" {
+		return false
+	}
+	if k == "COMMENT" || p == "COMMENT" {
+		return true
+	}
+	if k == ")" || k == "]" || k == "," || k == "." || k == ":" || k == ";" || k == "..." {
+		return false
+	}
+	if p == "(" || p == "[" || p == "." {
+		return false
+	}
+	if get(unary, previous.offset).value {
+		// Separate adjacent operators so - -x cannot become --x, or & ^x &^x.
+		return precedence(k) > 0 || k == "!"
+	}
+	if precedence(p) > 0 || assignmentOperator(p) || p == "," || p == ":" || p == ";" {
+		return true
+	}
+	if k == "(" {
+		return p != "IDENT" && p != ")" && p != "]"
+	}
+	if k == "[" || k == "++" || k == "--" {
+		return false
+	}
+	if k == "{" {
+		return block
+	}
+	if p == "{" || k == "}" {
+		return false
+	}
+	return true
+}
+
+func formatSameSyntax(left SyntaxNode, right SyntaxNode) bool {
+	var a List[SyntaxNode]
+	var b List[SyntaxNode]
+	a = prepend(left, a)
+	b = prepend(right, b)
+	for head(a).ok && head(b).ok {
+		x := head(a).value
+		y := head(b).value
+		a = tail(a)
+		b = tail(b)
+		if x.kind != y.kind || x.text != y.text || len(x.children) != len(y.children) {
+			return false
+		}
+		for _, child := range x.children {
+			a = prepend(child, a)
+		}
+		for _, child := range y.children {
+			b = prepend(child, b)
+		}
+	}
+	return !head(a).ok && !head(b).ok
+}
+
+func formatSourceText(filename string, source string) TextResult {
+	parsed := parse(filename, source)
+	if !parsed.ok {
+		return TextResult{reason: filename + ":" + formatInt(parsed.line) + ":" + formatInt(parsed.column) + ": " + parsed.reason}
+	}
+	r := formatRoles(parsed.root)
+	tokens := lex(filename, source).tokens
+	w := FormatWriter{}
+	var frames List[FormatFrame]
+	previous := Token{}
+	previousEnd := 0
+	headerEnd := 0
+	caseDepth := -1
+	for head(tokens).ok {
+		t := head(tokens).value
+		tokens = tail(tokens)
+		k := t.kind
+		if k == "EOF" {
+			break
+		}
+		if end := get(r.headers, t.offset); end.ok {
+			headerEnd = end.value
+		}
+		if k == ";" {
+			if headerEnd > t.offset && !head(frames).value.group {
+				formatWrite(&w, ";", false)
+			} else {
+				if get(r.empty, t.offset).value {
+					formatWrite(&w, ";", false)
+				}
+				formatBreak(&w)
+			}
+			previous = t
+			if !t.implicit && t.line > previousEnd {
+				previousEnd = t.line
+			}
+			continue
+		}
+		closing := k == "}" || k == ")" || k == "]"
+		frame := head(frames).value
+		if closing {
+			if frame.inCase {
+				w.indent--
+			}
+			w.indent--
+			if frame.block && !frame.empty || frame.group {
+				formatBreak(&w)
+			}
+			frames = tail(frames)
+		}
+		if t.line > previousEnd && previousEnd > 0 && w.line != "" {
+			formatBreak(&w)
+		}
+		if t.line > previousEnd+1 && previousEnd > 0 && !closing {
+			formatBlank(&w)
+		}
+		if get(r.declarations, t.offset).value && previous.kind != "COMMENT" {
+			formatBlank(&w)
+		}
+		if k == "case" || k == "default" {
+			formatBreak(&w)
+			frame = head(frames).value
+			if frame.inCase {
+				w.indent--
+			}
+			frame.inCase = true
+			frames = prepend(frame, tail(frames))
+			caseDepth = len(frames)
+		}
+		block := k == "{" && (get(r.blocks, t.offset).value || previous.kind == "struct")
+		formatWrite(&w, t.text, formatSpace(previous, t, r.unary, block))
+		if k == "{" || k == "(" || k == "[" {
+			group := k == "(" && (previous.kind == "const" || previous.kind == "var" || previous.kind == "type" || previous.kind == "import")
+			if k == "{" && previous.kind == "struct" {
+				group = true
+			}
+			empty := head(tokens).value.kind == "}" || head(tokens).value.kind == ")"
+			frames = prepend(FormatFrame{kind: k, block: block, group: group, empty: empty}, frames)
+			w.indent++
+			if (block || group) && !empty {
+				formatBreak(&w)
+			}
+		}
+		if k == ":" && len(frames) == caseDepth {
+			caseDepth = -1
+			w.indent++
+			formatBreak(&w)
+		}
+		if k == "COMMENT" && len(t.text) >= 2 && slice(t.text, 0, 2) == "//" {
+			formatBreak(&w)
+		}
+		previous = t
+		previousEnd = t.line + len(split(t.text, "\n")) - 1
+	}
+	formatBreak(&w)
+	var lines List[string]
+	for _, line := range w.lines {
+		lines = prepend(line, lines)
+	}
+	output := join(lines, "")
+	checked := parse(filename, output)
+	if !checked.ok || !formatSameSyntax(parsed.root, checked.root) {
+		return TextResult{reason: filename + ": formatter could not preserve syntax; file unchanged"}
+	}
+	return TextResult{value: output, ok: true}
+}

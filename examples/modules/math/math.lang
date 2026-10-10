@@ -1,0 +1,9 @@
+package math
+
+const base = 40
+const Key = "answer"
+
+type Result struct{ value int }
+
+func Answer() Result           { return Result{value: base + 2} }
+func Scores() Map[string, int] { return Map[string, int]{Key: Answer().value} }

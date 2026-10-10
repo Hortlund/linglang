@@ -1,0 +1,27 @@
+package main
+
+func emitServerCall(e *Emitter, node SyntaxNode, name string) string {
+	var codes List[string]
+	var ids List[int]
+	handler := ""
+	for i, argument := range tail(node.children) {
+		if name == "superviseServer" && i == 2 {
+			if argument.kind != "Ident" || emitValue(e, argument).kind != "func" {
+				emitFail(e, argument.at, "superviseServer requires a named language function")
+				return ""
+			}
+			handler = "fun " + emitFunctionName(argument.text) + "/2"
+		} else {
+			codes = append(codes, emitExpression(e, argument, false))
+			ids = append(ids, emitValue(e, argument).typeID)
+		}
+	}
+	if name == "call" {
+		t := get(e.checked.types, emitValue(e, node).typeID).value
+		return emitOrdered(e, codes, ids, "fun(P, V, T) -> linglang_server:call(P, "+emitMessageSchema(e, emitValue(e, node).messageType)+", V, "+emitMessageSchema(e, t.elem)+", T, "+emitZero(e, t.elem, node.at)+") end")
+	}
+	t := get(e.checked.types, emitValue(e, childAt(node, 3)).typeID).value
+	state := get(e.checked.types, head(t.params).value).value.elem
+	request := head(tail(t.params)).value
+	return emitOrdered(e, codes, ids, "fun(S, N, A, O) -> linglang_sup:add_server(S, N, "+handler+", A, "+emitMessageSchema(e, state)+", "+emitMessageSchema(e, request)+", "+emitMessageSchema(e, t.result)+", O) end")
+}

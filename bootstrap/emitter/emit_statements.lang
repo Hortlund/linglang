@@ -171,13 +171,20 @@ func emitStatement(e *Emitter, node SyntaxNode) string {
 		cell := emitFresh(e)
 		return emitScope(cell + " = " + emitAddress(e, target) + ", linglang_rt:keep(" + cell + "), linglang_rt:write(" + cell + ", linglang_rt:binary(" + op + ", linglang_rt:read(" + cell + "), 1))")
 	case "IfStmt":
-		if childAt(node, 0).kind != "nil" {
-			emitFail(e, node.at, "bootstrap emitter does not support if initializers")
-		}
+		values := e.values
+		init := emitStatement(e, childAt(node, 0))
 		condition := emitScope(emitExpression(e, childAt(node, 1), false))
 		body := emitStatement(e, childAt(node, 2))
 		other := emitStatement(e, childAt(node, 3))
-		return "case " + condition + " of true -> " + body + "; false -> " + other + " end"
+		e.values = values
+		branch := "case " + condition + " of true -> " + body + "; false -> " + other + " end"
+		if childAt(node, 0).kind != "nil" {
+			// The initializer owns one lexical scope shared by the condition
+			// and both branches, including an else-if. Escaping pointers are
+			// retained by the outer roots when this scope unwinds.
+			return emitScope(init + ", " + branch)
+		}
+		return branch
 	}
 	emitFail(e, node.at, "bootstrap emitter does not support statement "+node.kind)
 	return ""

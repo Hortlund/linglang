@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "../../stdlib/http/http.lang",
+      "sha256": "f5665c14c4daf825e6c6ee32d1a4dbf94c4bfb5f3e08ddf539f37d40029b3b84"
+    }
+  ]
+}

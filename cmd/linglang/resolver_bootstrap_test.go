@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/types"
 	"os"
 	"os/exec"
@@ -18,13 +19,28 @@ import (
 )
 
 // Compare actual lexical bindings, not merely whether a name is accepted.
-// Field selectors and identifier literal keys are explicitly deferred until
-// the bootstrap type checker knows the receiver/literal type.
+// Field selectors remain deferred. Map keys have lexical bindings, including
+// elided literals; the resolver also retains their deferred key metadata.
 func seedBindings(t *testing.T, sources []compiler.SourceFile) []string {
 	t.Helper()
 	analysis := compiler.Analyze(sources)
 	if len(analysis.Diagnostics) != 0 {
 		t.Fatalf("oracle package: %+v", analysis.Diagnostics)
+	}
+	// Analyze retains original trees for outlines but checks renamed module
+	// trees. Use the originals for this independent lexical-binding oracle.
+	prelude, err := parser.ParseFile(analysis.FileSet, "<prelude>", compiler.PreludeSource(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := []*ast.File{prelude}
+	for _, source := range sources {
+		files = append(files, analysis.Files[source.Filename])
+	}
+	info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}}
+	config := types.Config{GoVersion: "go1.23", Sizes: types.SizesFor("gc", "amd64")}
+	if _, err := config.Check("main", analysis.FileSet, files, info); err != nil {
+		t.Fatal(err)
 	}
 	skipped := map[*ast.Ident]bool{}
 	parameters := map[*ast.Ident]bool{}
@@ -32,11 +48,16 @@ func seedBindings(t *testing.T, sources []compiler.SourceFile) []string {
 	for _, file := range analysis.Files {
 		ast.Inspect(file, func(node ast.Node) bool {
 			var deferred *ast.Ident
+			skip := true
 			switch n := node.(type) {
 			case *ast.SelectorExpr:
 				deferred = n.Sel
 			case *ast.KeyValueExpr:
 				deferred, _ = n.Key.(*ast.Ident)
+				if obj := info.Uses[deferred]; obj != nil {
+					field, ok := obj.(*types.Var)
+					skip = ok && field.IsField()
+				}
 			case *ast.FuncDecl:
 				for _, field := range n.Type.Params.List {
 					for _, id := range field.Names {
@@ -45,14 +66,14 @@ func seedBindings(t *testing.T, sources []compiler.SourceFile) []string {
 				}
 			}
 			if deferred != nil {
-				skipped[deferred] = true
+				skipped[deferred] = skip
 				pos := analysis.FileSet.PositionFor(deferred.Pos(), false)
 				records = append(records, fmt.Sprintf("defer %q %d", pos.Filename, pos.Offset))
 			}
 			return true
 		})
 	}
-	for id, obj := range analysis.Info.Defs {
+	for id, obj := range info.Defs {
 		if obj == nil || id.Name == "_" {
 			continue
 		}
@@ -81,7 +102,7 @@ func seedBindings(t *testing.T, sources []compiler.SourceFile) []string {
 			records = append(records, fmt.Sprintf("def %q %s %q %d", id.Name, kind, pos.Filename, pos.Offset))
 		}
 	}
-	for id, obj := range analysis.Info.Uses {
+	for id, obj := range info.Uses {
 		pos := analysis.FileSet.PositionFor(id.Pos(), false)
 		if _, user := analysis.Files[pos.Filename]; !user || skipped[id] {
 			continue
@@ -117,7 +138,7 @@ func assertBindingDump(t *testing.T, out []byte, want []string) {
 
 func TestBootstrapResolverAgainstSeedBindings(t *testing.T) {
 	var packages [][]compiler.SourceFile
-	for _, path := range []string{"../../examples/beans.lang", "../../examples/prime_lab", "../../bootstrap/lexer", "../../bootstrap/parser", "../../bootstrap/resolver"} {
+	for _, path := range []string{"../../examples/worker_registration.lang", "../../examples/prime_lab", "../../bootstrap/lexer", "../../bootstrap/parser", "../../bootstrap/resolver"} {
 		absolute, err := filepath.Abs(path)
 		if err != nil {
 			t.Fatal(err)
