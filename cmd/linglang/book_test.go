@@ -19,6 +19,7 @@ func bookExamples(t *testing.T) []bookExample {
 	examples := []bookExample{
 		{name: "hello", want: "Hello from Linglang\n"},
 		{name: "values", want: "7\n16\n"},
+		{name: "multiple", want: "21 answer\n9 2\n"},
 		{name: "collections", want: "2 3\n7\n42\n"},
 	}
 	for i := range examples {

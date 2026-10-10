@@ -52,7 +52,8 @@ func TestBootstrapSelfHostProof(t *testing.T) {
 	env = append(env, "ERL_FLAGS=-kernel logger_level emergency")
 	invoke := func(name string, args ...string) (string, string, error) {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		// Self-emission takes several minutes locally and longer on hosted runners.
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, name, args...)
 		cmd.Env, cmd.Dir = env, dir
@@ -132,6 +133,7 @@ func TestBootstrapSelfHostProof(t *testing.T) {
 	t.Run("structured_tooling", func(t *testing.T) { testStructuredDriver(t, artifact, env, "bootstrap") })
 	t.Run("test_runner", func(t *testing.T) { testBootstrapRunner(t, artifact, env) })
 	t.Run("modules", func(t *testing.T) { testBootstrapModules(t, artifact, env) })
+	t.Run("multiple_results", func(t *testing.T) { testBootstrapMultipleResults(t, artifact, env) })
 	t.Run("typed_io", func(t *testing.T) { testBootstrapIO(t, artifact, env) })
 	t.Run("cli_stdin", func(t *testing.T) {
 		testBootstrapStdin(t, artifact, env)
@@ -143,6 +145,7 @@ func TestBootstrapSelfHostProof(t *testing.T) {
 		testBootstrapRunLifetime(t, artifact, env)
 	})
 	for _, f := range []struct{ name, code, want string }{
+		{"multiple_results_program", multipleResultsFixture, "multiple results ok\n"},
 		{"if_initializers", ifInitializerFixture, "if initializers ok\n"},
 		{"otp_server_calls", otpServerFixture, otpServerOutput},
 		{"otp_timers", otpTimerFixture, otpTimerOutput},
@@ -250,5 +253,6 @@ func TestSelfHostedFeatures(t *testing.T) {
 	t.Run("structured_tooling", func(t *testing.T) { testStructuredDriver(t, artifact, env, "bootstrap") })
 	t.Run("test_runner", func(t *testing.T) { testBootstrapRunner(t, artifact, env) })
 	t.Run("modules", func(t *testing.T) { testBootstrapModules(t, artifact, env) })
+	t.Run("multiple_results", func(t *testing.T) { testBootstrapMultipleResults(t, artifact, env) })
 	t.Run("typed_io", func(t *testing.T) { testBootstrapIO(t, artifact, env) })
 }

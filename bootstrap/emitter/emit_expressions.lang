@@ -223,6 +223,16 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 		return ""
 	}
 	if function.kind == "func" {
+		if len(codes) == 1 && get(e.checked.types, head(ids).value).value.kind == "tuple" {
+			value := emitFresh(e)
+			var args List[string]
+			index := 1
+			for range get(e.checked.types, head(ids).value).value.params {
+				args = append(args, "element("+formatInt(index)+", "+value+")")
+				index++
+			}
+			return "(begin " + value + " = " + emitKeep(e, head(ids).value, head(codes).value) + ", " + emitFunctionName(callee.text) + "(" + join(args, ", ") + ") end)"
+		}
 		return emitOrdered(e, codes, ids, emitFunctionName(callee.text))
 	}
 	if collection {

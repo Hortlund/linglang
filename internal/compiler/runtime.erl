@@ -2,7 +2,7 @@
 -module(linglang_rt).
 -include_lib("kernel/include/file.hrl").
 -export([new/1, new/2, read/1, write/2, field/2, field_value/2, deref/1,
-         binary/3, print/2, loop/4, loop_cell/5,
+         binary/3, print/2, loop/4, loop_cell/5, loop_cells/5,
          list_length/1, list_append/2, list_prepend/2, list_head/2,
          list_tail/1, list_first/1, list_more/1, list_range/4,
          map_length/1, map_get/3, map_put/3, map_remove/2,
@@ -888,4 +888,30 @@ loop_cell_next(Condition, Body, Post, Token, Cell) ->
     case Result of
         done -> ok;
         {next, Next} -> loop_cell_next(Condition, Body, Post, Token, Next)
+    end.
+
+%% Every for-initializer binding gets a fresh cell before the post statement.
+loop_cells(Condition, Body, Post, Token, Cells) ->
+    try loop_cells_next(Condition, Body, Post, Token, Cells)
+    catch throw:{linglang_break, Token} -> ok
+    end.
+
+loop_cells_next(Condition, Body, Post, Token, Cells) ->
+    Result = scope(fun() ->
+        keep(Cells),
+        safepoint(),
+        case scope(fun() -> Condition(Cells) end) of
+            false -> done;
+            true ->
+                try Body(Cells)
+                catch throw:{linglang_continue, Token} -> ok
+                end,
+                Next = [new(read(Cell), cell_trace(Id)) || Cell = {linglang_ptr, _, Id, _} <- Cells],
+                scope(fun() -> Post(Next) end),
+                {next, Next}
+        end
+    end),
+    case Result of
+        done -> ok;
+        {next, Next} -> loop_cells_next(Condition, Body, Post, Token, Next)
     end.

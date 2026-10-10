@@ -91,9 +91,6 @@ func parseFunction(p *Parser) SyntaxNode {
 		} else {
 			results = parserSyntax(p, "FieldList", opening, "", List[SyntaxNode]{parameterField(p, parseType(p))})
 		}
-		if len(results.children) > 1 {
-			parseFail(p, "multiple return values are not supported")
-		}
 		for _, field := range results.children {
 			if len(childAt(field, 0).children) > 0 {
 				parseFail(p, "named return values are not supported")

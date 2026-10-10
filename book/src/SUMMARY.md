@@ -5,6 +5,7 @@
 # Learn Linglang
 
 - [Getting started](getting-started.md)
+- [Installation and compiler releases](installation.md)
 - [Values, mutation, and control flow](values.md)
 - [Collections and errors](collections.md)
 - [Processes and OTP servers](processes.md)

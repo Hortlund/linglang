@@ -1,0 +1,94 @@
+package main
+
+type MultiNode struct{ n int }
+
+func multiNode(n int) *MultiNode { v := MultiNode{n: n}; return &v }
+func multiChurn() int {
+	for i := 0; i < 40; i++ {
+		_ = multiNode(i)
+	}
+	return 9
+}
+func multiPair() (int, string)                { return 7, "seven" }
+func multiForward() (int, string)             { return multiPair() }
+func multiUse(n int, s string)                { assert(n == 7 && s == "seven") }
+func multiPointers() (*MultiNode, *MultiNode) { return multiNode(3), multiSlow() }
+func multiSlow() *MultiNode                   { _ = multiChurn(); return multiNode(4) }
+func multiTake(a, b *MultiNode)               { _ = multiChurn(); assert(a.n == 3 && b.n == 4) }
+func multiTarget(p *MultiNode, order *int, digit int) *MultiNode {
+	*order = *order*10 + digit
+	return p
+}
+func multiRHS(order *int, digit int) int { *order = *order*10 + digit; return digit }
+
+type MultiFields struct {
+	x int
+	y int
+}
+
+func multiClear(p **MultiNode) int { *p = nil; return multiChurn() }
+func multiCount(n *int) (int, int) { (*n)++; return *n, *n + 1 }
+func TestMultipleResults() {
+	a, b := 1, 2
+	a, b = b, a
+	assert(a == 2 && b == 1)
+	a, c := 3, 4
+	assert(a == 3 && c == 4)
+	a, a = 5, 6
+	assert(a == 6)
+	var x, y int
+	assert(x == 0 && y == 0)
+	var n, s = multiForward()
+	assert(n == 7 && s == "seven")
+	multiUse(multiForward())
+	_, s = multiPair()
+	_, _ = multiPair()
+	var _, _ = multiPair()
+	var _ int
+	p, q := multiPointers()
+	p, q = q, p
+	_ = multiChurn()
+	assert(p.n == 4 && q.n == 3)
+	multiTake(multiPointers())
+	old := p
+	p, p.n = q, 12
+	assert(p == q && old.n == 12)
+	order := 0
+	multiTarget(p, &order, 1).n, multiTarget(q, &order, 2).n = multiRHS(&order, 3), multiRHS(&order, 4)
+	assert(order == 1234 && p.n == 4)
+	var ps List[*int]
+	var qs List[*int]
+	for i, j := 0, 10; i < 3; i, j = i+1, j+2 {
+		ps = append(ps, &i)
+		qs = append(qs, &j)
+		if i == 1 {
+			continue
+		}
+	}
+	_ = multiChurn()
+	assert(*head(ps).value == 0 && *head(tail(ps)).value == 1 && *head(tail(tail(ps))).value == 2)
+	assert(*head(qs).value == 10 && *head(tail(qs)).value == 12 && *head(tail(tail(qs))).value == 14)
+	if n, s := multiPair(); n == 7 {
+		assert(s == "seven")
+	} else {
+		panic("init")
+	}
+	count := 0
+	u, v := multiCount(&count)
+	assert(count == 1 && u == 1 && v == 2)
+	_, _ = multiCount(&count)
+	assert(count == 2)
+	fields := MultiFields{x: 1, y: 2}
+	fields.x, fields.y = fields.y, fields.x
+	assert(fields.x == 2 && fields.y == 1)
+	p = multiNode(8)
+	p.n, n = multiClear(&p), multiChurn()
+	assert(p == nil && n == 9)
+	{
+		a, b := a, b
+		assert(a == 6 && b == 1)
+		a, b = 20, 30
+	}
+	assert(a == 6 && b == 1)
+
+}

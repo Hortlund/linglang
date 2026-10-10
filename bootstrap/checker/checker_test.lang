@@ -232,3 +232,22 @@ func TestInternalIdentities() {
 	name := head(childAt(head(childAt(function, 1).children).value, 0).children).value
 	assert(get(checked.definitions, sourceIdentity(name.at)).ok)
 }
+
+func TestMultipleResults() {
+	assert(checkedSource("func pair()(int,string){return 1,\"ok\"};func forward()(int,string){return pair()};func use(n int,s string){};func f(){a,b:=pair();a,c:=2,true;use(pair());a,b=forward();_,_=a,c}").ok)
+	for _, source := range (List[string]{
+		"func f()(int,string){return 1}",
+		"func f()(int,string){return 1,2}",
+		"func f()int{return 1,2}",
+		"func pair()(int,string){return 1,\"ok\"};func f(){a:=pair();_=a}",
+		"func pair()(int,string){return 1,\"ok\"};func f(){_,_=pair(),1}",
+		"func pair()(int,string){return 1,\"ok\"};func f(){println(pair())}",
+		"func f(){a,a:=1,2;_=a}",
+		"func f(){a,b:=1,2;a,b:=2,3;_,_=a,b}",
+		"func f(){_,_:=1,2}",
+		"func f(){a,b:=1,2;a,b=3;_,_=a,b}",
+		"func worker(n int)(int,int){return n,n};func f(){spawn(worker,1)}",
+	}) {
+		assert(!checkedSource(source).ok)
+	}
+}

@@ -30,15 +30,18 @@ const Key="answer"
 const value=40
 type Answer struct { value int }
 func Get() Answer{return Answer{value:value+2}}
+func Pair()(Answer,bool){return Get(),true}
+func Use(a Answer,ok bool){assert(ok&&a.value==42)}
 func Values()Map[string,int]{return Map[string,int]{Key:Get().value}}`)
 	write("other/other.lang", `package other
 import "../math"
-func Get()numbers.Answer{return numbers.Get()}`)
+func Get()numbers.Answer{return numbers.Get()}
+func Pair()(numbers.Answer,bool){return numbers.Pair()}`)
 	source := `package main
 import n "./math"
 import "./other"
 type Holder struct { n int }
-func main(){h:=Holder{n:1};assert(h.n==1);a:=n.Get();b:=other.Get();assert(a==b);assert(get(n.Values(),n.Key).value==42);println(a.value)}`
+func main(){v,ok:=other.Pair();assert(ok&&v.value==42);n.Use(other.Pair());h:=Holder{n:1};assert(h.n==1);a:=n.Get();b:=other.Get();assert(a==b);assert(get(n.Values(),n.Key).value==42);println(a.value)}`
 	write("main.lang", source)
 	write("main_test.lang", `package main
 import "./math"

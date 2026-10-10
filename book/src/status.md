@@ -16,7 +16,8 @@ evidence.
 | Loops, switch, if initializers | Yes | Yes |
 | Processes, monitors, timers, supervisors, synchronous servers | Yes | Yes |
 | Passive TCP and SQLite prepared statements | Yes | Yes |
-| Multiple assignment | No | No |
+| Multiple results and simultaneous assignment | Yes | Yes |
+| Downloadable self-hosted toolchain | Release CI builds and verifies it | Portable OTP 29 archive; Linux/macOS install checks |
 | General positional struct literals, `new`/`make` forms | Broader support | Not fully supported |
 | Structured checks and test events | `check --json`, `check --tests`, `test --json` | Yes |
 | Capability and native API discovery | `describe [--json]` | `describe [--json]` |
@@ -63,6 +64,6 @@ still change.
    diagnostics, resource lifetime, and real applications meet explicit criteria.
 
 Typed process destinations, asynchronous server callbacks, direct Erlang abstract
-forms, and multiple assignment remain useful language/compiler work. A stable
+forms, and richer package inspection remain useful language/compiler work. A stable
 release date would be premature; the implementation and acceptance tests should
 set that decision.

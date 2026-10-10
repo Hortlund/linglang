@@ -333,6 +333,12 @@ func callExpression(c *Checker, scope *TypeScope, node SyntaxNode) CheckedValue 
 	for _, value := range argsReversed {
 		values = prepend(value, values)
 	}
+	if len(values) == 1 && head(values).value.kind == "tuple" {
+		if function.kind != "func" {
+			checkFail(c, node.at, "multiple results cannot expand into builtins")
+		}
+		values = expandResults(c, values)
+	}
 	if c.constantDepth > 0 && function.kind != "type" && !(function.kind == "intrinsic" && function.name == "len" && defaultType(valueAt(values, 0).typeID) == tString) {
 		checkFail(c, node.at, "constant requires a constant expression")
 	}
@@ -391,5 +397,20 @@ func callExpression(c *Checker, scope *TypeScope, node SyntaxNode) CheckedValue 
 		requireType(c, node, head(values).value, id)
 		values = tail(values)
 	}
+	if checkedType(c, signature.result).kind == "tuple" {
+		return CheckedValue{kind: "tuple", typeID: signature.result}
+	}
 	return expressionValue(signature.result)
+}
+
+// Only a sole multi-result expression expands; results are not tuple values.
+func expandResults(c *Checker, values List[CheckedValue]) List[CheckedValue] {
+	if len(values) == 1 && head(values).value.kind == "tuple" {
+		var expanded List[CheckedValue]
+		for _, id := range checkedType(c, head(values).value.typeID).params {
+			expanded = append(expanded, expressionValue(id))
+		}
+		return expanded
+	}
+	return values
 }

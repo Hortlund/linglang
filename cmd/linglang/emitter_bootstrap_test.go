@@ -18,6 +18,7 @@ import (
 func TestBootstrapEmitterPrograms(t *testing.T) {
 	type fixture struct{ name, code, want, failure string }
 	fixtures := []fixture{
+		{"local_multiple_results", multipleResultsFixture, "multiple results ok\n", ""},
 		{"if_initializers", ifInitializerFixture, "if initializers ok\n", ""},
 		{"otp_server_calls", otpServerFixture, otpServerOutput, ""},
 		{"otp_server_result_roots", emitterPointerHelpers + `func makeResult()CallResult[*N]{return CallResult[*N]{value:node(7),ok:true}};func main(){r:=makeResult();p:=&r;_=churn();println(p.value.x,p.ok,p.timedOut,p.reason=="")}`, "7 true false true\n", ""},

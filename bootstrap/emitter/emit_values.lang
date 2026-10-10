@@ -25,6 +25,10 @@ func emitRequireType(e *Emitter, id int, at Token) {
 				emitFail(e, at, "Map keys must be int or string")
 			}
 			pending = prepend(t.elem, pending)
+		} else if t.kind == "tuple" {
+			for _, param := range t.params {
+				pending = prepend(param, pending)
+			}
 		} else if t.kind == "struct" {
 			for _, field := range t.fields {
 				pending = prepend(field.typeID, pending)

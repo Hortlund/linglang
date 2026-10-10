@@ -237,7 +237,7 @@ func TestDiagnostics(t *testing.T) {
 		{"package main\nfunc main() { go main() }", "unsupported statement"},
 		{"package main\nfunc main() { x := []int{1}; println(x) }", "unsupported type"},
 		{"package main\nfunc main() { x := 1.5; println(x) }", "unsupported type"},
-		{"package main\nfunc main() { a, b := 1, 2; println(a,b) }", "multiple assignment"},
+		{"package main\nfunc main() { a, b := 1; println(a,b) }", "assignment mismatch"},
 		{"package main\nvar x = 1\nfunc main() { println(x) }", "top-level variables"},
 		{"package main\nfunc main() { defer main() }", "unsupported statement"},
 		{"package main\nfunc init() {}\nfunc main() {}", "init and blank function"},

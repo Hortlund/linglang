@@ -60,9 +60,15 @@ func functionType(c *Checker, scope *TypeScope, declaration SyntaxNode) int {
 	for _, id := range reversed {
 		params = prepend(id, params)
 	}
-	result := tVoid
+	var results List[int]
 	for _, field := range childAt(declaration, 2).children {
-		result = typeSyntax(c, scope, childAt(field, 1))
+		results = append(results, typeSyntax(c, scope, childAt(field, 1)))
+	}
+	result := tVoid
+	if len(results) == 1 {
+		result = head(results).value
+	} else if len(results) > 1 {
+		result = addType(c, CheckedType{kind: "tuple", params: results})
 	}
 	name := childAt(declaration, 0)
 	if (name.text == "main" || name.text == "init") && (len(params) != 0 || result != tVoid) {
@@ -105,6 +111,7 @@ func checkValues(c *Checker, scope *TypeScope, declaration SyntaxNode) {
 		for _, value := range reversed {
 			checked = prepend(value, checked)
 		}
+		checked = expandResults(c, checked)
 		names := childAt(spec, 0).children
 		if len(checked) != 0 && len(checked) != len(names) {
 			checkFail(c, spec.at, "declaration value count mismatch")

@@ -1,5 +1,8 @@
 # Getting started
 
+For a published self-hosted compiler download, follow [installation](installation.md).
+It requires OTP 29 and runs without Go. The instructions below build from source.
+
 ## Build the development compiler
 
 From a checkout, install Go 1.23 or later and Erlang/OTP with `erl`, `erlc`, and

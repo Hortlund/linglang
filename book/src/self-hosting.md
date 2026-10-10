@@ -5,6 +5,9 @@ driver, and test runner are written in Linglang. An existing compiler can rebuil
 them and run programs using Erlang/OTP alone. You no longer need to invoke a Go
 test to perform the compiler fixed-point check.
 
+A [release archive](installation.md) supplies a verified compiler without Go.
+You can use its installed `linglang` as `--seed /absolute/path/to/linglang`.
+
 From a source checkout with a trusted `bin/linglang-bootstrap` archive:
 
 ```sh
@@ -34,8 +37,8 @@ The build command performs these steps:
 4. Require byte-for-byte equality of B and C's Erlang source. Print the byte count
    and SHA-256 digest. This compares emitted compiler code, not archive metadata.
 5. Compile and run C against the lexer, parser, resolver, checker, emitter, and
-   concurrency test suites with forced managed collection. Repeat the concurrency
-   suite with the reference cell lowering.
+   concurrency and language test suites with forced managed collection. Repeat the
+   concurrency and language suites with the reference cell lowering.
 6. Package C and the freshly compiled runtime, then publish the complete executable
    with an atomic rename. A failed stage leaves an existing output executable intact.
 

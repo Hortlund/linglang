@@ -40,7 +40,7 @@ bootstrap(#{root := Root, seed := SeedPath, output := OutputPath, timeout := Tim
     Output = filename:absname(OutputPath, Root),
     Source = filename:join(Root, "bootstrap/emitter"),
     Suites = ["bootstrap/lexer", "bootstrap/parser", "bootstrap/resolver",
-              "bootstrap/checker", "bootstrap/emitter", "tests/concurrency"],
+              "bootstrap/checker", "bootstrap/emitter", "tests/concurrency", "tests/language"],
     RuntimePaths = [{linglang_rt, "runtime.erl"}, {linglang_sup, "supervision.erl"},
                     {linglang_server, "server.erl"}, {linglang_io, "io.erl"}],
     %% Protect even test sources, symlink aliases and hardlinks. Publication must
@@ -92,6 +92,9 @@ bootstrap(#{root := Root, seed := SeedPath, output := OutputPath, timeout := Tim
         CellResult = run(C, ["test", "--no-opt", "--gc-stress", "--timeout", "120s",
                              filename:join(Root, "tests/concurrency")], Work, "suite-cells", Timeout),
         io:put_chars(CellResult),
+        LanguageCells = run(C, ["test", "--no-opt", "--gc-stress", "--timeout", "120s",
+                              filename:join(Root, "tests/language")], Work, "suite-language-cells", Timeout),
+        io:put_chars(LanguageCells),
         Launcher = compile_source(<<"-module(linglang_cli).\n-export([main/1]).\nmain(Args) -> linglang_rt:bootstrap_main(Args, false, false).\n">>, linglang_cli),
         {ok, {_, Zip}} = zip:create("compiler.zip", [{"linglang_cli.beam", Launcher},
                             {"linglang_program.beam", CBeam} | Runtime], [memory]),

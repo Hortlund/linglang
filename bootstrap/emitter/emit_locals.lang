@@ -83,9 +83,11 @@ func emitAnalyzeLocals(e *Emitter, function SyntaxNode) {
 		}
 		// A short declaration initializes a fresh identity. Counting it as a
 		// later write would exclude every read-only short-declared local.
-		if node.kind == "AssignStmt" && node.text != ":=" {
+		if node.kind == "AssignStmt" {
 			for _, target := range childAt(node, 0).children {
-				changed = put(changed, emitLocalKey(e, target), true)
+				if !get(e.checked.definitions, sourceIdentity(target.at)).ok {
+					changed = put(changed, emitLocalKey(e, target), true)
+				}
 			}
 		} else if node.kind == "IncDecStmt" {
 			changed = put(changed, emitLocalKey(e, childAt(node, 0)), true)

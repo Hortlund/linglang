@@ -42,7 +42,7 @@ setup. It gives the generated compiler an isolated OTP-only PATH:
 ```sh
 LINGLANG_SELFHOST=1 \
 LINGLANG_SELFHOST_OUT="$PWD/bin/linglang-bootstrap" \
-go test ./cmd/linglang -run '^TestBootstrapSelfHostProof$' -count=1 -v -timeout=15m
+go test ./cmd/linglang -run '^TestBootstrapSelfHostProof$' -count=1 -v -timeout=45m
 ```
 
 The artifact is actual generation C, not a renamed Go executable. The command
@@ -113,3 +113,14 @@ JSON reader and pure lock/catalogue behavior; filesystem tests exercise SHA-256
 and exclusive publication in both lowerings under forced GC. Generic intrinsic
 descriptions and parameter labels live in `native_catalog.lang`; ordinary types
 are derived from checker registrations rather than a duplicated prelude.
+
+Multiple-result regression programs live in `tests/language`. Run them with both
+compilers and with `--no-opt --gc-stress` as well as optimized GC stress. The
+bootstrap checker and emitter suites include invalid arity/type cases, and the
+Go-seeded proof executes multiple-result programs through the actual compiler C.
+
+Compiler distributions use the [release workflow](installation.md#maintainer-release-procedure).
+`tools/release/test-install.sh` tests installation failures and upgrades quickly;
+`tools/release/smoke.sh` checks a real packaged compiler without Go or `erlc` on
+PATH. Packaging must follow a completed proof, not merely the appearance of its
+output file.

@@ -174,3 +174,18 @@ The runtime supplies only SHA-256 and filesystem primitives. `writeNewFile`
 publishes a complete file exclusively using a same-directory temporary file and
 atomic hard link; `replaceFile` checks expected bytes and atomically renames.
 These operations require a filesystem supporting the corresponding operations.
+
+## Multiple results and assignment
+
+Function result signatures contain ordered component types. The bootstrap stores
+these in an internal `tuple` descriptor; source programs cannot name or store a
+tuple type. Both compilers lower multiple results to an Erlang tuple and expand
+it only at checked return, declaration, assignment, and ordinary-call boundaries.
+
+Assignment lowering captures destination references before right-hand values,
+roots them during evaluation, and then performs writes left to right. Values
+being handed from the temporary scope to local storage cross no collection
+safepoint. Optimized locals retain their native representation where possible;
+addressed locals use managed cells. For-loop initializer bindings each receive
+new iteration storage before the post statement. Differential tests exercise
+these rules with forced collection and the reference lowering.

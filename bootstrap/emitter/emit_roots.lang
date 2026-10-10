@@ -34,6 +34,10 @@ func emitReferences(e *Emitter, id int) bool {
 			pending = prepend(t.elem, pending)
 		case "map":
 			pending = prepend(t.key, prepend(t.elem, pending))
+		case "tuple":
+			for _, param := range t.params {
+				pending = prepend(param, pending)
+			}
 		case "struct":
 			for _, field := range t.fields {
 				pending = prepend(field.typeID, pending)

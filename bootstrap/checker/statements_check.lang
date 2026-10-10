@@ -17,9 +17,6 @@ func assignmentTarget(c *Checker, scope *TypeScope, node SyntaxNode) CheckedValu
 func checkAssignment(c *Checker, scope *TypeScope, node SyntaxNode) {
 	lhs := childAt(node, 0).children
 	rhs := childAt(node, 1).children
-	if len(lhs) != len(rhs) {
-		checkFail(c, node.at, "assignment value count mismatch")
-	}
 	// Evaluate all RHS in the old scope before binding any new LHS names.
 	var reversed List[CheckedValue]
 	for _, expression := range rhs {
@@ -28,6 +25,13 @@ func checkAssignment(c *Checker, scope *TypeScope, node SyntaxNode) {
 	var values List[CheckedValue]
 	for _, value := range reversed {
 		values = prepend(value, values)
+	}
+	values = expandResults(c, values)
+	if len(lhs) != len(values) {
+		checkFail(c, node.at, "assignment value count mismatch")
+	}
+	if node.text != "=" && node.text != ":=" && (len(lhs) != 1 || len(rhs) != 1) {
+		checkFail(c, node.at, "compound assignment requires one value")
 	}
 	for _, target := range lhs {
 		value := head(values).value
@@ -91,15 +95,25 @@ func checkStatement(c *Checker, scope *TypeScope, node SyntaxNode, result int) {
 		child := childAt(node, 0)
 		requireType(c, child, assignmentTarget(c, scope, child), tInt)
 	case "ReturnStmt":
-		wanted := 1
-		if result == tVoid {
-			wanted = 0
+		var wanted List[int]
+		if checkedType(c, result).kind == "tuple" {
+			wanted = checkedType(c, result).params
+		} else if result != tVoid {
+			wanted = List[int]{result}
 		}
-		if len(node.children) != wanted {
+		var values List[CheckedValue]
+		expected := wanted
+		for _, child := range node.children {
+			values = append(values, checkExpression(c, scope, child, head(expected).value))
+			expected = tail(expected)
+		}
+		values = expandResults(c, values)
+		if len(values) != len(wanted) {
 			checkFail(c, node.at, "return value count mismatch")
 		}
-		for _, child := range node.children {
-			requireType(c, child, checkExpression(c, scope, child, result), result)
+		for _, id := range wanted {
+			requireType(c, node, head(values).value, id)
+			values = tail(values)
 		}
 	case "ExprStmt":
 		child := childAt(node, 0)

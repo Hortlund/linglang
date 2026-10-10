@@ -17,7 +17,7 @@ jobs:
   test:
     name: Linux / OTP 29 smoke checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -29,6 +29,8 @@ jobs:
           otp-version: '29'
       - name: Check Go formatting
         run: test -z "$(gofmt -l cmd internal)"
+      - name: Installer regressions
+        run: tools/release/test-install.sh
       - name: Vet
         run: go vet ./...
       - name: Build optional SQLite adapter
@@ -41,19 +43,21 @@ jobs:
       - name: CLI, OTP, and packaging smoke tests
         run: go test ./cmd/linglang -run '^(TestExecutionWithGCFlags|TestSupervisorEscalationExitsCleanly|TestDirectoryCLI|TestReadSources|TestPackCLI|TestDeveloperCommands|TestStructuredRunnerCLI|TestStructuredToolingCLI|TestCheckTestDiscovery|TestToolingOutputFailure|TestInitProject|TestInitRejectsExistingContent|TestBookExamples|TestLocalModules|TestDependencyLock|TestWebCounter|TestIsolatedOTPLaunchers|TestBootstrapEmitterPackedWithoutGo)$' -count=1 -timeout=5m
       - name: Self-hosted driver feature checks
-        run: go test ./cmd/linglang -run 'TestBootstrapCLI/.*/(test_runner|modules|typed_io|structured_tooling|developer_tools|discovery)' -count=1 -timeout=8m
+        run: go test ./cmd/linglang -run 'TestBootstrapCLI/.*/(test_runner|modules|multiple_results|typed_io|structured_tooling|developer_tools|discovery)' -count=1 -timeout=8m
       - name: Go-free build orchestration checks
         run: go test ./cmd/linglang -run 'TestGoFreeBootstrapTool|TestBootstrapSchedulerDefaults' -count=1 -timeout=2m
       - name: Build the CLI
         run: go build -o _build/linglang ./cmd/linglang
       - name: Check example formatting
-        run: ./_build/linglang fmt --check examples/worker_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang
+        run: ./_build/linglang fmt --check examples/worker_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang tests/language
       - name: Test workers on both backends with GC stress
         run: |
           ./_build/linglang test --gc-stress --gc-stats examples/worker_tests
           ./_build/linglang test --no-opt --gc-stress --gc-stats examples/worker_tests
           ./_build/linglang test --gc-stress tests/concurrency
           ./_build/linglang test --no-opt --gc-stress tests/concurrency
+          ./_build/linglang test --gc-stress tests/language
+          ./_build/linglang test --no-opt --gc-stress tests/language
 
   compatibility:
     name: ${{ matrix.os }} / OTP ${{ matrix.otp }}
@@ -90,13 +94,15 @@ jobs:
       - name: Build the CLI
         run: go build -o _build/linglang ./cmd/linglang
       - name: Check example formatting
-        run: ./_build/linglang fmt --check examples/worker_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang
+        run: ./_build/linglang fmt --check examples/worker_tests bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker bootstrap/emitter examples/bootstrap_demo examples/bootstrap_loops.lang tests/language
       - name: Test workers and the bootstrap tools on both backends with GC stress
         run: |
           ./_build/linglang test --gc-stress --gc-stats examples/worker_tests
           ./_build/linglang test --no-opt --gc-stress --gc-stats examples/worker_tests
           ./_build/linglang test --gc-stress tests/concurrency
           ./_build/linglang test --no-opt --gc-stress tests/concurrency
+          ./_build/linglang test --gc-stress tests/language
+          ./_build/linglang test --no-opt --gc-stress tests/language
           ./_build/linglang test --gc-stress --gc-stats bootstrap/lexer
           ./_build/linglang test --no-opt --gc-stress --gc-stats bootstrap/lexer
           ./_build/linglang test --gc-stress --gc-stats bootstrap/parser

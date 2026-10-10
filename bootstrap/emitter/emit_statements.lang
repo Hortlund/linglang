@@ -29,18 +29,24 @@ func emitVariables(e *Emitter, node SyntaxNode) string {
 	for _, spec := range node.children {
 		names := childAt(spec, 0).children
 		values := childAt(spec, 2).children
-		if len(names) != 1 || len(values) > 1 || head(names).value.text == "_" {
-			emitFail(e, spec.at, "bootstrap emitter requires one named variable per declaration")
-			return ""
-		}
-		name := head(names).value
-		id := emitDefinition(e, name).typeID
-		emitRequireType(e, id, name.at)
-		value := emitZero(e, id, name.at)
+		value := ""
 		if head(values).ok {
-			value = emitExpression(e, head(values).value, false)
+			value = emitResults(e, values)
+		} else {
+			var zeros List[string]
+			for _, name := range names {
+				zero := "ok"
+				if name.text != "_" {
+					zero = emitZero(e, emitDefinition(e, name).typeID, name.at)
+				}
+				zeros = append(zeros, zero)
+			}
+			value = head(zeros).value
+			if len(zeros) > 1 {
+				value = "{" + join(zeros, ", ") + "}"
+			}
 		}
-		parts = append(parts, emitDeclareLocal(e, name, emitScope(value)))
+		parts = append(parts, emitAssignResults(e, names, value))
 	}
 	return "(begin " + join(parts, ", ") + " end)"
 }
@@ -48,8 +54,11 @@ func emitVariables(e *Emitter, node SyntaxNode) string {
 func emitAssignment(e *Emitter, node SyntaxNode) string {
 	lhs := childAt(node, 0).children
 	rhs := childAt(node, 1).children
+	if len(lhs) > 1 && (node.text == "=" || node.text == ":=") {
+		return emitAssignResults(e, lhs, emitResults(e, rhs))
+	}
 	if len(lhs) != 1 || len(rhs) != 1 {
-		emitFail(e, node.at, "bootstrap emitter does not support multiple assignment")
+		emitFail(e, node.at, "compound assignment requires one target and value")
 		return ""
 	}
 	target := head(lhs).value
@@ -91,16 +100,19 @@ func emitAssignment(e *Emitter, node SyntaxNode) string {
 func emitFor(e *Emitter, node SyntaxNode) string {
 	initializer := childAt(node, 0)
 	init := emitStatement(e, initializer)
-	initial := ""
-	iteration := ""
-	key := ""
+	var initials List[string]
+	var iterations List[string]
+	var keys List[string]
 	if initializer.kind == "AssignStmt" && initializer.text == ":=" {
-		name := head(childAt(initializer, 0).children).value
-		if name.kind == "Ident" && name.text != "_" && !get(e.valueLocals, sourceIdentity(name.at)).value {
-			key = sourceIdentity(name.at)
-			initial = emitCell(e, name, true)
-			iteration = emitFresh(e)
-			e.cells = put(e.cells, key, iteration)
+		for _, name := range childAt(initializer, 0).children {
+			key := sourceIdentity(name.at)
+			if name.text != "_" && !get(e.valueLocals, key).value {
+				initials = append(initials, emitCell(e, name, true))
+				iteration := emitFresh(e)
+				iterations = append(iterations, iteration)
+				keys = append(keys, key)
+				e.cells = put(e.cells, key, iteration)
+			}
 		}
 	}
 	condition := "true"
@@ -114,9 +126,14 @@ func emitFor(e *Emitter, node SyntaxNode) string {
 	body := emitStatement(e, childAt(node, 3))
 	e.breaks = tail(e.breaks)
 	e.loops = tail(e.loops)
-	if iteration != "" {
-		e.cells = put(e.cells, key, initial)
-		return emitScope(init + ", " + loop + " = make_ref(), linglang_rt:loop_cell(fun(" + iteration + ") -> " + condition + " end, fun(" + iteration + ") -> " + body + " end, fun(" + iteration + ") -> " + post + " end, " + loop + ", " + initial + ")")
+	if head(iterations).ok {
+		old := initials
+		for _, key := range keys {
+			e.cells = put(e.cells, key, head(old).value)
+			old = tail(old)
+		}
+		pattern := "[" + join(iterations, ", ") + "]"
+		return emitScope(init + ", " + loop + " = make_ref(), linglang_rt:loop_cells(fun(" + pattern + ") -> " + condition + " end, fun(" + pattern + ") -> " + body + " end, fun(" + pattern + ") -> " + post + " end, " + loop + ", [" + join(initials, ", ") + "])")
 	}
 	return emitScope(init + ", " + loop + " = make_ref(), linglang_rt:loop(fun() -> " + condition + " end, fun() -> " + body + " end, fun() -> " + post + " end, " + loop + ")")
 }
@@ -153,10 +170,7 @@ func emitStatement(e *Emitter, node SyntaxNode) string {
 	case "ExprStmt":
 		return emitScope(emitExpression(e, childAt(node, 0), false))
 	case "ReturnStmt":
-		value := "ok"
-		if head(node.children).ok {
-			value = emitExpression(e, head(node.children).value, false)
-		}
+		value := emitResults(e, node.children)
 		return emitScope("throw({linglang_return, " + e.ret + ", " + value + "})")
 	case "IncDecStmt":
 		target := childAt(node, 0)

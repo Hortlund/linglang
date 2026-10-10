@@ -21,7 +21,7 @@ production readiness or application scalability.
 ## Language and runtime
 
 - Imperative functions, structs, constants, loops, conditionals, and explicit
-  process-local mutation.
+  process-local mutation, multiple return values, and simultaneous assignment.
 - Integers, booleans, strings, pointers, immutable lists, and immutable maps.
 - Lightweight BEAM processes, typed message payloads, selective receive,
   monitors, and timers.
@@ -65,6 +65,10 @@ func main() {
 Save this as `sum.lang` and run `linglang run sum.lang`. It prints `Total: 5050`.
 
 ## Get started
+
+[Compiler downloads and installation](book/src/installation.md) describes the
+self-hosted OTP 29 packages and release workflow. Published packages require no Go.
+Until the first release is published, build from source below.
 
 For a first build from source, install Go 1.23 or later and Erlang/OTP with
 `erl`, `erlc`, and `escript` on PATH. The compatibility targets are OTP 27–29.

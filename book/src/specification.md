@@ -34,7 +34,8 @@ resolve lexically, including keys in nested literals with an omitted type;
 struct field keys name fields rather than lexical bindings.
 
 Executable programs require one `func main()` with no parameters or result.
-Functions may have zero or more typed parameters and at most one result. A
+Functions may have zero or more typed parameters and zero or more unnamed results.
+Multiple results use a parenthesized type list: `func pair() (int, string)`. A
 non-void function must terminate appropriately on all reachable paths accepted
 by the compiler's flow checker. Both compilers support test compilation without `main`, including library
 packages. Only `Test...` functions declared in root `_test.lang` files are tests;
@@ -94,10 +95,28 @@ Strings compare byte contents. String `+` concatenates bytes.
 ## Declarations, statements, and scope
 
 Local variables use `var name Type [= expression]` or `name := expression`.
+Both forms accept lists: `var x, y int`, `var n, text = pair()`,
+and `x, y := 1, 2`.
 Blocks establish lexical scopes. A local name can shadow an outer declaration.
 Assignments and compound assignments change local storage. `++` and `--` are
-statements. Multiple assignment is not implemented by either emitter; use separate
-statements.
+statements. Simultaneous assignment (`x, y = y, x`) follows two phases:
+
+1. Evaluate destination references left to right, then all right-hand expressions
+   left to right. Reads see storage as it exists during this evaluation; a call
+   may mutate it. No assignment writes have happened yet.
+2. Assign the captured values to the captured destinations left to right.
+
+Thus swaps work, repeated destinations take the last assigned value, and
+`p, p.x = q, 7` writes `7` through the original `p`. Captured references and
+values remain alive across calls and garbage collection. A failure during
+operand evaluation prevents assignment writes; a failure during writing does
+not roll back prior writes. `_` discards its corresponding value but does not
+skip evaluation. The arity and types of destinations and values must match.
+A short declaration requires identifier targets, no repeated nonblank names,
+and at least one new nonblank name in the current scope. Existing names in that
+scope are assigned; outer names are shadowed. All initializers resolve before
+new names enter scope. Compound assignment still takes exactly one target and
+one value.
 
 `if [initializer;] condition { ... } [else ...]` requires a boolean condition.
 The initializer executes once before the condition. Its scope includes the
@@ -105,6 +124,8 @@ condition, then-branch, and complete else-branch, and ends with the statement.
 A returned or otherwise escaped pointer to initializer storage remains valid.
 
 `for` supports condition-only, infinite, and initializer/condition/post forms.
+Each variable introduced by a `for` initializer has fresh storage per iteration,
+including multiple bindings; the next iteration's storage is created before the post statement.
 List range evaluates its source once. Variables declared by range have fresh
 identity per iteration; assignment-form range updates existing identifiers.
 `switch` supports an optional initializer, optional tag, multiple case values,
@@ -112,9 +133,19 @@ and at most one default clause. The first matching case executes. Cases have
 their own scopes and do not fall through. `break` targets the nearest loop or
 switch; `continue` targets the nearest loop. Labels and `fallthrough` are absent.
 
-`return` exits the current function. `panic(string)` fails the process, and
+`return` exits the current function. `return x, y` supplies multiple results in
+left-to-right evaluation order. A sole multiple-result call can supply all
+values in an assignment, variable declaration, another function's return, or
+an ordinary function call: `use(pair())`. The receiving arity and component
+types must match. Multiple results are not first-class tuples: they cannot be
+stored in one variable, mixed with other values in the same expression list,
+or expanded into built-ins/native APIs. Bind the results first when calling
+those APIs. Named results, bare returns from non-void functions, and variadic
+user functions are unsupported.
+
+`panic(string)` fails the process, and
 `assert(false)` fails with a source location. General exception handlers,
-`defer`, closures, and multiple return values are not supported.
+`defer`, and closures are not supported.
 
 ## Values and ownership
 

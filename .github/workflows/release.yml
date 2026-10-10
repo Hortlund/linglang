@@ -1,0 +1,112 @@
+name: Release toolchain
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.x'
+          cache: false
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '29'
+      - name: Install SQLite test dependency
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - name: Validate version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]] || exit 1
+            echo "VERSION=$REF_NAME" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=dev-${GITHUB_SHA:0:12}" >> "$GITHUB_ENV"
+          fi
+      - name: Check and test
+        run: |
+          test -z "$(gofmt -l cmd internal)"
+          go vet ./...
+          tools/release/test-install.sh
+          go test ./... -count=1 -timeout=30m
+      - name: Verify actual self-built compiler C
+        env:
+          LINGLANG_SELFHOST: '1'
+          LINGLANG_SELFHOST_OUT: ${{ github.workspace }}/_build/release/linglang
+        run: |
+          set -o pipefail
+          mkdir -p _build/release
+          go test ./cmd/linglang -run '^TestBootstrapSelfHostProof$' -count=1 -v -timeout=45m | tee _build/release/selfhost-proof.log
+      - name: Run language suites with compiler C
+        run: |
+          for suite in bootstrap/lexer bootstrap/parser bootstrap/resolver bootstrap/checker bootstrap/emitter tests/concurrency tests/language; do
+            _build/release/linglang test --gc-stress --timeout 5m "$suite"
+          done
+          _build/release/linglang test --no-opt --gc-stress tests/language
+          _build/release/linglang test --no-opt --gc-stress tests/concurrency
+      - name: Package verified compiler
+        run: |
+          tools/release/package.sh _build/release/linglang "$VERSION" dist/toolchain
+          cp _build/release/selfhost-proof.log dist/toolchain/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: toolchain
+          path: dist/toolchain/
+          if-no-files-found: error
+
+  install-test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '29'
+      - uses: actions/download-artifact@v5
+        with:
+          name: toolchain
+          path: dist/toolchain
+      - name: Verify, install, and use without Go on PATH
+        run: tools/release/smoke.sh dist/toolchain
+
+  draft:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, install-test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: toolchain
+          path: dist/toolchain
+      - name: Create draft with verified artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/toolchain/* --verify-tag --draft --prerelease \
+            --title "Linglang $RELEASE_TAG" --generate-notes \
+            --notes 'Experimental self-hosted compiler. Requires Erlang/OTP 29 on Linux or macOS. Verify the archive using its .sha256 file, extract it, and run ./install.sh. Go is not required. See the bundled book for installation, language changes, and current limitations.'

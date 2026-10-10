@@ -42,7 +42,7 @@ func bootstrapCapabilities() List[ToolCapability] {
 		ToolCapability{name: "remote-packages", status: "unavailable", notes: "No registry, fetching, version solver or install hooks."},
 		ToolCapability{name: "user-generics", status: "unavailable", notes: "Generic native operations exist; user-defined generic declarations are unsupported."},
 		ToolCapability{name: "self-hosted-tooling", status: "limited", notes: "check/emit/build/run/test/fmt/init/describe/deps run on OTP without Go. lsp and release remain Go-driver commands."},
-		ToolCapability{name: "language-subset", status: "limited", notes: "The bootstrap supports fewer literal/allocation forms than the seed. Multiple assignment, interfaces and general Go packages are unsupported."},
+		ToolCapability{name: "language-subset", status: "limited", notes: "The bootstrap supports fewer literal/allocation forms than the seed. Interfaces and general Go packages are unsupported. Multiple results and simultaneous assignment are supported."},
 	}
 }
 func nativeTypeText(c *Checker, id int) string {

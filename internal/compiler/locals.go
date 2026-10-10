@@ -23,7 +23,7 @@ type flowBlock struct {
 	rangeRest types.Object // consume a native list cell on the true edge
 	rangeHead types.Object // current element, when the range binds a value
 	cond      ast.Expr
-	result    ast.Expr
+	result    []ast.Expr
 	next      *flowBlock
 	other     *flowBlock
 	returns   bool
@@ -197,6 +197,12 @@ func containsReferencesSeen(t types.Type, seen map[types.Type]bool) bool {
 				return true
 			}
 		}
+	case *types.Tuple:
+		for i := 0; i < t.Len(); i++ {
+			if containsReferencesSeen(t.At(i).Type(), seen) {
+				return true
+			}
+		}
 	case *types.Slice:
 		return containsReferencesSeen(t.Elem(), seen)
 	case *types.Map:
@@ -278,11 +284,13 @@ func (g *localLowering) statement(stmt ast.Stmt, next, stop, again *flowBlock) *
 			post = g.statement(s.Post, test, nil, nil)
 		}
 		if assign, ok := s.Init.(*ast.AssignStmt); ok && assign.Tok == token.DEFINE {
-			obj := g.c.info.Defs[assign.Lhs[0].(*ast.Ident)]
-			if g.lookup[obj].boxed {
-				clone := g.block()
-				clone.clone, clone.next = obj, post
-				post = clone
+			for _, lhs := range assign.Lhs {
+				obj := g.c.info.Defs[lhs.(*ast.Ident)]
+				if g.lookup[obj] != nil && g.lookup[obj].boxed {
+					clone := g.block()
+					clone.clone, clone.next = obj, post
+					post = clone
+				}
 			}
 		}
 		test.next = g.sequence(s.Body.List, post, next, post)
@@ -298,9 +306,7 @@ func (g *localLowering) statement(stmt ast.Stmt, next, stop, again *flowBlock) *
 	case *ast.ReturnStmt:
 		b := g.block()
 		b.returns = true
-		if len(s.Results) == 1 {
-			b.result = s.Results[0]
-		}
+		b.result = s.Results
 		return b
 	case *ast.BranchStmt:
 		if s.Tok == token.BREAK {
@@ -359,14 +365,27 @@ func (g *localLowering) analyzeLiveness() {
 				for _, value := range v.Values {
 					g.use(b, value)
 				}
-				b.defs[g.c.info.Defs[v.Names[0]]] = true
+				for _, name := range v.Names {
+					b.defs[g.c.info.Defs[name]] = true
+				}
 			}
 		case *ast.AssignStmt:
-			g.use(b, s.Rhs[0])
-			if s.Tok == token.DEFINE {
-				b.defs[g.c.info.Defs[s.Lhs[0].(*ast.Ident)]] = true
-			} else {
-				g.target(b, s.Lhs[0], s.Tok != token.ASSIGN)
+			for _, rhs := range s.Rhs {
+				g.use(b, rhs)
+			}
+			// Destination references are read before any destination is defined.
+			for _, lhs := range s.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && (id.Name == "_" || g.c.info.Defs[id] != nil) {
+					continue
+				}
+				g.use(b, lhs)
+			}
+			for _, lhs := range s.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && g.c.info.Defs[id] != nil {
+					b.defs[g.c.info.Defs[id]] = true
+				} else {
+					g.target(b, lhs, s.Tok != token.ASSIGN && s.Tok != token.DEFINE)
+				}
 			}
 		case *ast.IncDecStmt:
 			g.target(b, s.X, true)
@@ -374,7 +393,9 @@ func (g *localLowering) analyzeLiveness() {
 			g.use(b, s.X)
 		}
 		g.use(b, b.cond)
-		g.use(b, b.result)
+		for _, value := range b.result {
+			g.use(b, value)
+		}
 	}
 	for changed := true; changed; {
 		changed = false
@@ -480,13 +501,9 @@ func (g *localLowering) emitBlock(b *flowBlock) (string, error) {
 		state[b.rangeRest] = tail
 		parts = append(parts, "case "+rest+" of ["+head+" | "+tail+"] -> "+g.edge(b.next, state)+"; [] -> "+empty+"; nil -> "+empty+" end")
 	case b.returns:
-		value := "ok"
-		if b.result != nil {
-			var err error
-			value, err = c.expression(b.result)
-			if err != nil {
-				return "", err
-			}
+		value, err := c.resultValue(b.result)
+		if err != nil {
+			return "", err
 		}
 		parts = append(parts, g.eval(value))
 	case b.cond != nil:
@@ -521,25 +538,17 @@ func (g *localLowering) emitSimple(stmt ast.Stmt, state map[types.Object]string)
 	case *ast.DeclStmt:
 		var parts []string
 		for _, spec := range s.Decl.(*ast.GenDecl).Specs {
-			v := spec.(*ast.ValueSpec)
-			obj := c.info.Defs[v.Names[0]]
-			value := c.zero(obj.Type())
-			if len(v.Values) == 1 {
-				var err error
-				value, err = c.expression(v.Values[0])
-				if err != nil {
-					return "", err
-				}
+			code, err := c.variableDeclaration(spec.(*ast.ValueSpec), g, state)
+			if err != nil {
+				return "", err
 			}
-			parts = append(parts, g.declare(obj, value, state))
-			// A later initializer may call a function and collect. New direct
-			// pointer values must join the function roots before that happens.
-			if g.rooted && !g.lookup[obj].boxed && containsReferences(obj.Type()) {
-				parts = append(parts, "linglang_rt:keep("+state[obj]+")")
-			}
+			parts = append(parts, code)
 		}
 		return strings.Join(parts, ", "), nil
 	case *ast.AssignStmt:
+		if len(s.Lhs) > 1 && (s.Tok == token.DEFINE || s.Tok == token.ASSIGN) {
+			return c.parallelAssignment(s.Lhs, s.Rhs, g, state)
+		}
 		if s.Tok == token.DEFINE {
 			value, err := c.expression(s.Rhs[0])
 			if err != nil {

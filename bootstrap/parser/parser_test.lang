@@ -49,7 +49,7 @@ func TestParameterGroupsAndAnonymousStructs() {
 	fn = parsedFunction("func f(x,y int,z *Node)(){}")
 	assert(len(childAt(fn, 1).children) == 2 && len(childAt(fn, 2).children) == 0)
 	assert(!parse("mixed", "package main\nfunc f(x int,string){}").ok)
-	assert(!parse("returns", "package main\nfunc f()(int,string){}").ok)
+	assert(parse("returns", "package main\nfunc f()(int,string){return 1,\"ok\"}").ok)
 	assert(!parse("returns", "package main\nfunc f()(x int){}").ok)
 	assert(parse("anonymous", "package main\nfunc main(){var x struct{n int}; x=struct{n int}{n:1}; if ;x.n>0{println(x)}}").ok)
 }

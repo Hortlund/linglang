@@ -27,11 +27,36 @@ Use `for condition { ... }`, `for { ... }`, or a three-part loop as above.
 of the nearest loop. A `switch` evaluates its tag once, checks cases in source
 order, and never falls through. Tagless switches test boolean cases.
 
-Functions have typed parameters and at most one return value. Use a struct for
-several results. Named structs group fields; field access through a pointer
+Functions have typed parameters and zero or more unnamed results. Use a named
+struct when returned fields need names or a reusable value type. Field access through a pointer
 automatically dereferences it. User-defined generic functions, methods, closures,
 and interfaces are not available.
 
 **Exercise:** add an `else` branch to the example, then shadow `total` in the
 initializer. Verify which variable changes. Run again with `--no-opt` to compare
 the reference lowering with the optimized compiler.
+
+## Multiple results and simultaneous assignment
+
+Use multiple results for a small group of values returned together:
+
+```go
+{{#include ../examples/multiple.lang}}
+```
+
+This prints `21 answer` and then `9 2`. Assignment evaluates every destination
+reference and right-hand value before writing any destination, so a swap does
+not need a temporary variable. Writes happen from left to right. `a, a = 1, 2`
+leaves `a` equal to `2`.
+
+`n, text := answer()` declares both names. If `n` already exists in the same
+scope, it updates `n` and declares `text`; at least one nonblank name must be
+new. An outer `n` is shadowed instead. `_, text = answer()` evaluates the call
+and discards its first result. `var x, y int` initializes both variables to zero.
+
+A sole call can forward all its results with `return answer()` or supply an
+ordinary function's arguments with `consume(answer())`. Multiple results cannot
+be stored as a tuple or combined with additional arguments. Built-ins and native
+APIs require you to bind the results first. Named return variables and variadic
+functions are not implemented. See the [specification](specification.md) for
+the precise scope, evaluation, and failure rules.

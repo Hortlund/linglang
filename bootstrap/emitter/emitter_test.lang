@@ -103,7 +103,7 @@ func TestEmitterBoundaries() {
 		"func f()int{for true{return 1}};func main(){}",
 		"func main(){panic(1)}",
 		"func main(){send(self(),monitor(self()))}",
-		"func main(){x,y:=1,2;println(x,y)}",
+		"func main(){x,y:=1;println(x,y)}",
 		"func f()int{switch{case true:return 1}};func main(){}",
 		"func f()int{switch{default:break;return 1}};func main(){}",
 		"func main(){break}",
@@ -128,7 +128,7 @@ func TestEmitterLoops() {
 		parsed := parse("loops.lang", "package main\n"+source)
 		assert(parsed.ok)
 		result := emitPackage(List[SyntaxNode]{parsed.root})
-		assert(result.ok && result.reason == "" && (len(split(result.module, "linglang_rt:loop(")) > 1 || len(split(result.module, "linglang_rt:loop_cell(")) > 1))
+		assert(result.ok && result.reason == "" && (len(split(result.module, "linglang_rt:loop(")) > 1 || len(split(result.module, "linglang_rt:loop_cells(")) > 1))
 	}
 }
 
@@ -277,6 +277,19 @@ func TestEmitterIfInitializers() {
 		"func main(){x:=9;if x:=1;x>2{println(x)}else if y:=x+1;y==2{println(x,y)};println(x)}",
 	}) {
 		parsed := parse("if-init.lang", "package main\n"+source)
+		assert(parsed.ok)
+		assert(emitPackage(List[SyntaxNode]{parsed.root}).ok)
+		assert(emitPackageWithOptions(List[SyntaxNode]{parsed.root}, true).ok)
+	}
+}
+
+func TestEmitterMultipleResults() {
+	for _, source := range (List[string]{
+		"func pair()(int,string){return 3,\"ok\"};func relay()(int,string){return pair()};func use(n int,s string){};func main(){a,b:=relay();a,c:=4,true;use(pair());a,b=pair();_,_=a,c}",
+		"func main(){var a,b int;a,b=1,2;a,b=b,a;a,a=3,4;println(a,b)}",
+		"func main(){var p,q *int;for i,j:=0,2;i<2;i,j=i+1,j+1{p=&i;q=&j};println(*p,*q)}",
+	}) {
+		parsed := parse("multiple.lang", "package main\n"+source)
 		assert(parsed.ok)
 		assert(emitPackage(List[SyntaxNode]{parsed.root}).ok)
 		assert(emitPackageWithOptions(List[SyntaxNode]{parsed.root}, true).ok)

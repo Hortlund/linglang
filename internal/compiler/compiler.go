@@ -343,8 +343,8 @@ func (c *compiler) function(fn *ast.FuncDecl) (string, error) {
 		return "", c.errorf(fn, "methods, generics, and bodyless functions are not supported")
 	}
 	sig := c.info.Defs[fn.Name].Type().(*types.Signature)
-	if sig.Variadic() || sig.Results().Len() > 1 {
-		return "", c.errorf(fn, "variadic functions and multiple return values are not supported")
+	if sig.Variadic() {
+		return "", c.errorf(fn, "variadic functions are not supported")
 	}
 	for i := 0; i < sig.Results().Len(); i++ {
 		v := sig.Results().At(i)
@@ -427,25 +427,16 @@ func (c *compiler) statementCode(stmt ast.Stmt) (string, error) {
 		}
 		var parts []string
 		for _, spec := range d.Specs {
-			v := spec.(*ast.ValueSpec)
-			if len(v.Names) != 1 || len(v.Values) > 1 || v.Names[0].Name == "_" {
-				return "", c.errorf(v, "declare one named variable at a time")
+			code, err := c.variableDeclaration(spec.(*ast.ValueSpec), nil, nil)
+			if err != nil {
+				return "", err
 			}
-			obj := c.info.Defs[v.Names[0]]
-			value := c.zero(obj.Type())
-			if len(v.Values) == 1 {
-				var err error
-				value, err = c.expression(v.Values[0])
-				if err != nil {
-					return "", err
-				}
-			}
-			parts = append(parts, c.cell(obj)+" = "+c.newCell(obj.Type(), scoped(value)))
+			parts = append(parts, code)
 		}
 		return "begin " + strings.Join(parts, ", ") + " end", nil
 	case *ast.AssignStmt:
-		if len(s.Lhs) != 1 || len(s.Rhs) != 1 {
-			return "", c.errorf(s, "multiple assignment is not supported yet")
+		if len(s.Lhs) > 1 && (s.Tok == token.ASSIGN || s.Tok == token.DEFINE) {
+			return c.parallelAssignment(s.Lhs, s.Rhs, nil, nil)
 		}
 		value, err := c.expression(s.Rhs[0])
 		if err != nil {
@@ -495,13 +486,9 @@ func (c *compiler) statementCode(stmt ast.Stmt) (string, error) {
 			return "linglang_rt:write(" + v[0] + ", linglang_rt:binary(" + op + ", linglang_rt:read(" + v[0] + "), 1))"
 		}), nil
 	case *ast.ReturnStmt:
-		value := "ok"
-		if len(s.Results) == 1 {
-			var err error
-			value, err = c.expression(s.Results[0])
-			if err != nil {
-				return "", err
-			}
+		value, err := c.resultValue(s.Results)
+		if err != nil {
+			return "", err
 		}
 		return "throw({linglang_return, " + c.ret + ", " + value + "})", nil
 	case *ast.IfStmt:
@@ -546,13 +533,21 @@ func (c *compiler) statementCode(stmt ast.Stmt) (string, error) {
 		}
 		// Go-style loop declarations have a distinct variable each iteration.
 		// Compile callbacks against a parameter cell instead of the initial cell.
-		iteration, initial := "", ""
+		var iterations, initials []string
 		if assign, ok := s.Init.(*ast.AssignStmt); ok && assign.Tok == token.DEFINE {
-			obj := c.info.Defs[assign.Lhs[0].(*ast.Ident)]
-			initial = c.cell(obj)
-			iteration = c.fresh()
-			c.cells[obj] = iteration
-			defer func() { c.cells[obj] = initial }()
+			for _, lhs := range assign.Lhs {
+				id := lhs.(*ast.Ident)
+				if id.Name == "_" {
+					continue
+				}
+				obj := c.info.Defs[id]
+				initial := c.cell(obj)
+				iteration := c.fresh()
+				initials = append(initials, initial)
+				iterations = append(iterations, iteration)
+				c.cells[obj] = iteration
+				defer func() { c.cells[obj] = initial }()
+			}
 		}
 		if s.Cond != nil {
 			cond, err = c.expression(s.Cond)
@@ -575,8 +570,10 @@ func (c *compiler) statementCode(stmt ast.Stmt) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if iteration != "" {
-			return scoped(init + ", " + loop + " = make_ref(), linglang_rt:loop_cell(fun(" + iteration + ") -> " + cond + " end, fun(" + iteration + ") -> " + body + " end, fun(" + iteration + ") -> " + post + " end, " + loop + ", " + initial + ")"), nil
+		if len(iterations) > 0 {
+			iteration := "[" + strings.Join(iterations, ", ") + "]"
+			initial := "[" + strings.Join(initials, ", ") + "]"
+			return scoped(init + ", " + loop + " = make_ref(), linglang_rt:loop_cells(fun(" + iteration + ") -> " + cond + " end, fun(" + iteration + ") -> " + body + " end, fun(" + iteration + ") -> " + post + " end, " + loop + ", " + initial + ")"), nil
 		}
 		// Wrap loop initialization so its variables cannot escape into the next loop.
 		return scoped(init + ", " + loop + " = make_ref(), linglang_rt:loop(fun() -> " + cond + " end, fun() -> " + body + " end, fun() -> " + post + " end, " + loop + ")"), nil
@@ -771,6 +768,29 @@ func (c *compiler) expression(expr ast.Expr) (string, error) {
 			return "(" + c.zero(c.info.TypeOf(e)) + ")#{" + strings.Join(fields, ", ") + "}"
 		}), nil
 	case *ast.CallExpr:
+		if len(e.Args) == 1 {
+			if tuple, ok := c.info.TypeOf(e.Args[0]).(*types.Tuple); ok && tuple.Len() > 1 {
+				id, direct := e.Fun.(*ast.Ident)
+				if !direct {
+					return "", c.errorf(e, "multiple results require a direct user function call")
+				}
+				obj := c.info.Uses[id]
+				if _, user := obj.(*types.Func); !user || c.intrinsics[obj] != "" {
+					return "", c.errorf(e, "multiple results cannot expand into builtins")
+				}
+				value, err := c.expression(e.Args[0])
+				if err != nil {
+					return "", err
+				}
+				return c.ordered([]string{value}, func(v []string) string {
+					var args []string
+					for i := 0; i < tuple.Len(); i++ {
+						args = append(args, resultElement(v[0], i, tuple.Len()))
+					}
+					return functionName(id.Name) + "(" + strings.Join(args, ", ") + ")"
+				}), nil
+			}
+		}
 		if code, handled, err := c.mapCall(e); handled {
 			return code, err
 		}

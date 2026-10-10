@@ -124,9 +124,6 @@ func Analyze(sources []SourceFile) Analysis {
 					add(n.Pos(), "methods and generic function declarations are not supported")
 				}
 				if n.Type.Results != nil {
-					if len(n.Type.Results.List) > 1 {
-						add(n.Type.Results.Pos(), "multiple return values are not supported")
-					}
 					for _, field := range n.Type.Results.List {
 						if len(field.Names) != 0 {
 							add(field.Pos(), "named return values are not supported")

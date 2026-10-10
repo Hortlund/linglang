@@ -53,7 +53,7 @@ func TestAnalyzeUnnamedReturnTypes(t *testing.T) {
 			t.Fatalf("compiler accepted unsupported result %s", result)
 		}
 	}
-	for _, result := range []string{"int", "bool", "string", "*int", "List[int]", "Map[string,List[int]]", "RuneResult", "Pid", "struct{x int}"} {
+	for _, result := range []string{"(int,string)", "(*int,List[*int])", "int", "bool", "string", "*int", "List[int]", "Map[string,List[int]]", "RuneResult", "Pid", "struct{x int}"} {
 		source := "package main\nfunc good() " + result + " { panic(\"unused\") }\nfunc main(){}"
 		if analysis := Analyze([]SourceFile{{"result.lang", []byte(source)}}); len(analysis.Diagnostics) != 0 {
 			t.Fatalf("supported result %s rejected: %+v", result, analysis.Diagnostics)

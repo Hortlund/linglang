@@ -1,0 +1,77 @@
+package main
+
+// A multiple result is an internal tuple, not a first-class source value.
+func emitResults(e *Emitter, nodes List[SyntaxNode]) string {
+	if len(nodes) == 0 {
+		return "ok"
+	}
+	if len(nodes) == 1 {
+		return emitExpression(e, head(nodes).value, false)
+	}
+	var setup List[string]
+	var values List[string]
+	for _, node := range nodes {
+		value := emitFresh(e)
+		setup = append(setup, value+" = "+emitKeep(e, emitValue(e, node).typeID, emitExpression(e, node, false)))
+		values = append(values, value)
+	}
+	setup = append(setup, "{"+join(values, ", ")+"}")
+	return "(begin " + join(setup, ", ") + " end)"
+}
+
+// Capture destinations, then values, then write left to right. The scope roots
+// every captured reference until evaluation finishes. Installation cannot GC.
+func emitAssignResults(e *Emitter, targets List[SyntaxNode], code string) string {
+	if len(targets) == 1 {
+		target := head(targets).value
+		if target.text == "_" {
+			return emitScope(code)
+		}
+		emitRequireType(e, emitDefinition(e, target).typeID, target.at)
+		return emitDeclareLocal(e, target, emitScope(code))
+	}
+	var setup List[string]
+	var captured List[string]
+	var addresses Map[int, int]
+	index := 0
+	for _, target := range targets {
+		definition := get(e.checked.definitions, sourceIdentity(target.at))
+		if target.text != "_" && !definition.ok && !get(e.valueLocals, emitLocalKey(e, target)).value {
+			address := emitFresh(e)
+			setup = append(setup, address+" = linglang_rt:keep("+emitAddress(e, target)+")")
+			captured = append(captured, address)
+			addresses = put(addresses, index, len(captured))
+		}
+		index++
+	}
+	value := emitFresh(e)
+	setup = append(setup, value+" = "+code)
+	captured = append(captured, value)
+	setup = append(setup, "{"+join(captured, ", ")+"}")
+	bundle := emitFresh(e)
+	var writes List[string]
+	writes = append(writes, bundle+" = "+emitScope(join(setup, ", ")))
+	values := "element(" + formatInt(len(captured)) + ", " + bundle + ")"
+	index = 0
+	for _, target := range targets {
+		item := values
+		if len(targets) > 1 {
+			item = "element(" + formatInt(index+1) + ", " + values + ")"
+		}
+		if target.text != "_" {
+			definition := get(e.checked.definitions, sourceIdentity(target.at))
+			key := emitLocalKey(e, target)
+			if definition.ok {
+				emitRequireType(e, definition.value.typeID, target.at)
+				writes = append(writes, emitDeclareLocal(e, target, item))
+			} else if get(e.valueLocals, key).value {
+				writes = append(writes, emitAssignValue(e, key, item))
+			} else {
+				writes = append(writes, "linglang_rt:write(element("+formatInt(get(addresses, index).value)+", "+bundle+"), "+item+")")
+			}
+		}
+		index++
+	}
+	writes = append(writes, "ok")
+	return "(begin " + join(writes, ", ") + " end)"
+}

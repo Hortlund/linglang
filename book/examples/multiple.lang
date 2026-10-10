@@ -1,0 +1,10 @@
+package main
+
+func answer() (int, string) { return 21, "answer" }
+func main() {
+	n, text := answer()
+	println(n, text)
+	x, y := 2, 9
+	x, y = y, x
+	println(x, y)
+}
