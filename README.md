@@ -1,5 +1,7 @@
 # Linglang
 
+**LING Is Not Go.**
+
 An experimental imperative language for the BEAM/OTP platform, with C/Go-style
 syntax, lightweight processes, typed message payloads, and OTP supervision.
 
