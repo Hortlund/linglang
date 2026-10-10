@@ -58,6 +58,17 @@ receive encoded Erlang names rather than relying on source names being valid
 Erlang atoms. Ordered operand evaluation and lexical runtime scopes preserve
 imperative semantics despite Erlang's single-assignment variables.
 
+Constant string concatenation uses an immutable rope: small values stay inline,
+and larger values refer to a package-local table of nodes by integer ID. Nodes
+link to children by ID, so even a generic root scan cannot recursively expand
+shared subtrees. No managed pointers are needed in constant metadata. The checker
+returns the node table with its checked result; consumers must retain that table
+and never mix IDs from independent checks. IDs let comparisons skip shared
+prefixes without expanding enormous strings; distinct nodes still compare their
+contents. Consumers materialize bytes only when needed. This is a compiler
+representation choice, not different language semantics or a relaxation of
+string size limits.
+
 ## Module linking
 
 Both drivers load a deterministic, closed graph of relative imports. The Go

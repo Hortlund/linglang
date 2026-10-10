@@ -201,7 +201,7 @@ func checkStatement(c *Checker, scope *TypeScope, node SyntaxNode, result int) {
 			for _, value := range childAt(clause, 0).children {
 				checked := checkExpression(c, &block, value, id)
 				requireType(c, value, checked, id)
-				seenCases = recordConstantKey(seenCases, checked.constant)
+				seenCases = recordConstantKey(seenCases, checked.constant, c.stringNodes)
 				if seenCases.duplicate {
 					checkFail(c, value.at, "duplicate constant switch case")
 				}

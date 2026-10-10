@@ -67,6 +67,7 @@ type CheckResult struct {
 	reason      string
 	at          Token
 	constants   Map[string, ConstantValue]
+	stringNodes Map[int, ConstantStringNode]
 }
 
 type PendingConstant struct {
@@ -93,6 +94,8 @@ type Checker struct {
 	types         Map[int, CheckedType]
 	interned      Map[string, int]
 	next          int
+	nextString    int
+	stringNodes   Map[int, ConstantStringNode]
 	reason        string
 	at            Token
 	depth         int

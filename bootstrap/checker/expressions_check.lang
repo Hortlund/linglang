@@ -267,7 +267,7 @@ func compositeExpression(c *Checker, scope *TypeScope, node SyntaxNode, expected
 			checkedKey := checkExpression(c, scope, key, t.key)
 			requireType(c, key, checkedKey, t.key)
 			rememberMapKey(c, scope, key)
-			keys = recordConstantKey(keys, checkedKey.constant)
+			keys = recordConstantKey(keys, checkedKey.constant, c.stringNodes)
 			if keys.duplicate {
 				checkFail(c, key.at, "duplicate constant Map key")
 			}

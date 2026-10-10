@@ -92,6 +92,35 @@ and emitter themselves as test packages before running their tests. This is a
 compiler acceptance workflow, separate from the much smaller application edit,
 check, and test loop.
 
+## Profile the compiler without Go
+
+The OTP-only profiler runs the actual compiler embedded in an archive:
+
+```sh
+mkdir -p _build/profiles
+escript benchmarks/profile.escript \
+  --compiler bin/linglang-selfhost --source bootstrap/lexer \
+  > _build/profiles/lexer.json
+```
+
+It requires OTP 29, uses one scheduler, and profiles `check` through lowering.
+Neither Go, Python, nor an external `erlc` is involved. Version 1 JSON includes
+the compiler archive hash, source path, managed-cell counters, and functions
+sorted by call time. Encoded Linglang function names are decoded in
+`source_function`; runtime and anonymous function names remain as emitted.
+`--no-opt` selects cell lowering for the source being checked; it does not change
+how the supplied compiler itself was built. `--timeout SECONDS` bounds the worker
+(120 seconds by default). Failed checks and timeouts exit unsuccessfully.
+
+Instrumentation adds substantial overhead: use call counts and call-time shares
+to locate work, not as application latency or a speedup measurement. Only the
+compiler worker is traced, not spawned processes, OTP compilation, or VM startup.
+Managed-cell counts exclude ordinary BEAM heap allocations. Preserve source bytes
+and paths alongside a profile; the archive hash alone does not identify the input.
+Use the interleaved, uninstrumented archive benchmark in
+[`benchmarks/README.md`](https://github.com/Hortlund/linglang/blob/main/benchmarks/README.md)
+for before/after measurements; that harness currently requires Python 3.
+
 ## Upgrade a seed that predates filesystem and hashing primitives
 
 An older compiler does not recognize newly added native signatures. For the

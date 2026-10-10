@@ -77,6 +77,11 @@ Untyped integer constant arithmetic can exceed 64 bits, but a value used as an
 runtime rune expressions require an `int` context rather than a separate rune
 runtime type.
 
+String constants compare by byte contents, with lexicographic ordering, regardless
+of how concatenations were grouped or shared. `len` counts bytes. The compiler
+may retain concatenations without materializing all bytes; this does not change
+equality, ordering, or duplicate map/switch-key detection.
+
 Integer runtime arithmetic wraps to signed 64-bit two's-complement values.
 Integer division truncates toward zero; remainder has the dividend's sign.
 Division by zero fails the process. Bitwise operators and shifts are supported.

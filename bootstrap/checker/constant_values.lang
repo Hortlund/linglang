@@ -5,7 +5,8 @@ type ConstantValue struct {
 	integer ConstantInteger
 	boolean bool
 	text    string
-	rope    *ConstantStringNode
+	rope    int
+	size    int
 }
 
 func untypedInteger(id int) bool { return id == tUntypedInt || id == tUntypedRune }
@@ -290,17 +291,17 @@ func constantBinary(c *Checker, node SyntaxNode, id int, left CheckedValue, righ
 		case "+":
 			return checkedConstant(c, node, id, concatenateConstantStrings(c, node, a, b))
 		case "==":
-			return checkedConstant(c, node, id, constantBool(constantStringLength(a) == constantStringLength(b) && compareConstantStrings(a, b) == 0))
+			return checkedConstant(c, node, id, constantBool(constantStringLength(a) == constantStringLength(b) && compareConstantStrings(a, b, c.stringNodes) == 0))
 		case "!=":
-			return checkedConstant(c, node, id, constantBool(constantStringLength(a) != constantStringLength(b) || compareConstantStrings(a, b) != 0))
+			return checkedConstant(c, node, id, constantBool(constantStringLength(a) != constantStringLength(b) || compareConstantStrings(a, b, c.stringNodes) != 0))
 		case "<":
-			return checkedConstant(c, node, id, constantBool(compareConstantStrings(a, b) < 0))
+			return checkedConstant(c, node, id, constantBool(compareConstantStrings(a, b, c.stringNodes) < 0))
 		case "<=":
-			return checkedConstant(c, node, id, constantBool(compareConstantStrings(a, b) <= 0))
+			return checkedConstant(c, node, id, constantBool(compareConstantStrings(a, b, c.stringNodes) <= 0))
 		case ">":
-			return checkedConstant(c, node, id, constantBool(compareConstantStrings(a, b) > 0))
+			return checkedConstant(c, node, id, constantBool(compareConstantStrings(a, b, c.stringNodes) > 0))
 		case ">=":
-			return checkedConstant(c, node, id, constantBool(compareConstantStrings(a, b) >= 0))
+			return checkedConstant(c, node, id, constantBool(compareConstantStrings(a, b, c.stringNodes) >= 0))
 		}
 	}
 	if a.kind == "bool" && b.kind == "bool" {
@@ -318,9 +319,9 @@ func constantBinary(c *Checker, node SyntaxNode, id int, left CheckedValue, righ
 	return expressionValue(id)
 }
 
-func constantIdentity(value ConstantValue) string {
+func constantIdentity(value ConstantValue, nodes Map[int, ConstantStringNode]) string {
 	if value.kind == "string" {
-		return "s:" + constantStringBytes(value)
+		return "s:" + constantStringBytes(value, nodes)
 	}
 	if value.kind != "int" {
 		return ""

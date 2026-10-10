@@ -108,7 +108,7 @@ func main(){
   parsed:=parse("fixture.lang",source);assert(parsed.ok)
   result:=checkPackage(List[SyntaxNode]{parsed.root});if !result.ok{panic(result.reason)}
   found:=get(result.constants,"Value");assert(found.ok);value:=found.value
-  if value.kind=="bool"{if value.boolean{println(i,"b:true")}else{println(i,"b:false")}}else if value.kind=="string"{println(i,"s:"+valueHex(constantStringBytes(value)))}else{println(i,constantIdentity(value))}
+  if value.kind=="bool"{if value.boolean{println(i,"b:true")}else{println(i,"b:false")}}else if value.kind=="string"{println(i,"s:"+valueHex(constantStringBytes(value,result.stringNodes)))}else{println(i,constantIdentity(value,result.stringNodes))}
  }
 }`
 	files, err := readSources("../../bootstrap/checker")

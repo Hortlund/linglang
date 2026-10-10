@@ -4,15 +4,18 @@ package main
 const maxConstantStringBytes = 2000000000
 const inlineConstantStringBytes = 4096
 
+// A package-local table stores immutable rope nodes. Children use integer IDs,
+// not pointers or nested native trees: even an untyped GC root scan stays bounded
+// by the node count instead of expanding shared subtrees. Carry this table with
+// its constants; IDs from independent package checks must never be mixed.
 type ConstantStringNode struct {
 	left  ConstantValue
 	right ConstantValue
-	size  int
 }
 
 func constantStringLength(value ConstantValue) int {
-	if value.rope != nil {
-		return value.rope.size
+	if value.rope != 0 {
+		return value.size
 	}
 	return len(value.text)
 }
@@ -33,12 +36,14 @@ func concatenateConstantStrings(c *Checker, node SyntaxNode, a ConstantValue, b 
 	if left+right <= inlineConstantStringBytes {
 		return constantString(a.text + b.text)
 	}
-	return ConstantValue{kind: "string", rope: &ConstantStringNode{left: a, right: b, size: left + right}}
+	c.nextString++
+	c.stringNodes = put(c.stringNodes, c.nextString, ConstantStringNode{left: a, right: b})
+	return ConstantValue{kind: "string", rope: c.nextString, size: left + right}
 }
 
 // Consumers that need actual bytes materialize once, rather than at every +.
-func constantStringBytes(value ConstantValue) string {
-	if value.rope == nil {
+func constantStringBytes(value ConstantValue, nodes Map[int, ConstantStringNode]) string {
+	if value.rope == 0 {
 		return value.text
 	}
 	pending := List[ConstantValue]{value}
@@ -46,10 +51,12 @@ func constantStringBytes(value ConstantValue) string {
 	for head(pending).ok {
 		part := head(pending).value
 		pending = tail(pending)
-		if part.rope == nil {
+		if part.rope == 0 {
 			reversed = prepend(part.text, reversed)
 		} else {
-			pending = prepend(part.rope.left, prepend(part.rope.right, pending))
+			branch := get(nodes, part.rope)
+			assert(branch.ok)
+			pending = prepend(branch.value.left, prepend(branch.value.right, pending))
 		}
 	}
 	var parts List[string]
@@ -61,19 +68,23 @@ func constantStringBytes(value ConstantValue) string {
 
 // Compare aligned chunks. Shared subtrees can be skipped in constant time,
 // including gigantic prefixes in expressions such as (S+"a") < (S+"b").
-func compareConstantStrings(a ConstantValue, b ConstantValue) int {
+func compareConstantStrings(a ConstantValue, b ConstantValue, nodes Map[int, ConstantStringNode]) int {
 	as := List[ConstantValue]{a}
 	bs := List[ConstantValue]{b}
 	for head(as).ok && head(bs).ok {
 		x := head(as).value
 		y := head(bs).value
-		if (x.rope != nil && x.rope == y.rope) || (x.rope == nil && y.rope == nil && x.text == y.text) {
+		if (x.rope != 0 && x.rope == y.rope) || (x.rope == 0 && y.rope == 0 && x.text == y.text) {
 			as = tail(as)
 			bs = tail(bs)
-		} else if x.rope != nil && (y.rope == nil || constantStringLength(x) >= constantStringLength(y)) {
-			as = prepend(x.rope.left, prepend(x.rope.right, tail(as)))
-		} else if y.rope != nil {
-			bs = prepend(y.rope.left, prepend(y.rope.right, tail(bs)))
+		} else if x.rope != 0 && (y.rope == 0 || constantStringLength(x) >= constantStringLength(y)) {
+			branch := get(nodes, x.rope)
+			assert(branch.ok)
+			as = prepend(branch.value.left, prepend(branch.value.right, tail(as)))
+		} else if y.rope != 0 {
+			branch := get(nodes, y.rope)
+			assert(branch.ok)
+			bs = prepend(branch.value.left, prepend(branch.value.right, tail(bs)))
 		} else {
 			n := len(x.text)
 			if len(y.text) < n {
@@ -114,11 +125,11 @@ type ConstantKeys struct {
 
 // Large string keys retain their shared representation. Only small keys need
 // a flattened identity, so duplicate checking cannot allocate giant binaries.
-func recordConstantKey(keys ConstantKeys, value ConstantValue) ConstantKeys {
+func recordConstantKey(keys ConstantKeys, value ConstantValue, nodes Map[int, ConstantStringNode]) ConstantKeys {
 	keys.duplicate = false
 	if value.kind == "string" && constantStringLength(value) > inlineConstantStringBytes {
 		for _, previous := range keys.large {
-			if constantStringLength(previous) == constantStringLength(value) && compareConstantStrings(previous, value) == 0 {
+			if constantStringLength(previous) == constantStringLength(value) && compareConstantStrings(previous, value, nodes) == 0 {
 				keys.duplicate = true
 				return keys
 			}
@@ -126,7 +137,7 @@ func recordConstantKey(keys ConstantKeys, value ConstantValue) ConstantKeys {
 		keys.large = prepend(value, keys.large)
 		return keys
 	}
-	key := constantIdentity(value)
+	key := constantIdentity(value, nodes)
 	if key != "" {
 		keys.duplicate = get(keys.small, key).ok
 		keys.small = put(keys.small, key, true)

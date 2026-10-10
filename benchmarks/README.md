@@ -1,5 +1,40 @@
 # linglang benchmarks
 
+For an installed self-hosted compiler, OTP alone can identify hot functions:
+
+```sh
+mkdir -p _build/profiles
+escript benchmarks/profile.escript --compiler bin/linglang-selfhost \
+  --source bootstrap/lexer > _build/profiles/lexer.json
+```
+
+This profiles checking through lowering, not application execution or OTP's
+BEAM compilation. Version 1 JSON contains the archive SHA-256, source path,
+instrumented elapsed microseconds, managed counters, and per-function call counts
+and call time, sorted by descending time. `source_function` decodes Linglang
+function names. Only the compiler worker is traced. `--no-opt` changes the target
+lowering, not the supplied compiler's own lowering; `--timeout SECONDS` defaults
+to 120. Failed checks/timeouts fail the command, and successful reports require
+zero final managed cells and roots. The tool uses OTP 29 and no Go/Python/erlc.
+
+Tracing has substantial overhead. Use these profiles to select work, then measure
+uninstrumented archives against the same frozen source bytes and absolute paths:
+
+```sh
+python3 benchmarks/bootstrap.py \
+  --compiler before=/absolute/path/to/old-compiler \
+  --compiler after=/absolute/path/to/verified-new-compiler \
+  --corpus /absolute/path/to/frozen-corpus \
+  --samples 5 --warmup 1 --out _build/profiles/comparison.json
+```
+
+That harness alternates archive order, excludes VM startup, retains source and
+artifact hashes, and checks deterministic emission and final managed cleanup.
+Do not run other builds/tests alongside latency measurements. A compiler profile
+or one small corpus cannot establish application throughput or production scale.
+
+## Application runtime benchmarks
+
 Run from the repository root with Go, `erl`, and `erlc` available:
 
 ```sh
@@ -274,6 +309,32 @@ above and preserve a separate report when measuring changes.
 
 ## Local baseline
 
+### Application baseline — 2026-10-11
+
+macOS ARM64, OTP 29.1.1, one scheduler, seven samples and two warmups, with no
+concurrent repository tests. These are median microseconds for the fixed workloads
+above, emitted by the Go seed's two lowerings; compilation and VM startup are
+excluded. These are not measurements of programs emitted by the self-built CLI.
+
+| Workload | Cells | Optimized | Erlang reference |
+| --- | ---: | ---: | ---: |
+| arithmetic | 217641 | 5708 | 4524 |
+| calls | 435302 | 5540 | 4452 |
+| structs | 254901 | 9674 | 8153 |
+| pointers | 316589 | 81731 | 5196 |
+| lists | 79433 | 1534 | 1084 |
+| maps | 67935 | 4944 | 3884 |
+| strings | 212958 | 6947 | 51181 |
+| messages | 87274 | 30829 | 17748 |
+
+All answers and final managed cleanup checks passed. The reference differences
+described above matter: pointer identity, message validation, and string-library
+choices differ. Pointer-heavy application code is a useful next profiling target;
+these measurements do not establish multi-node throughput or fault-recovery
+behavior. The compiler rope optimization below targets compiler work, not these
+application workloads. Raw report:
+`_build/perf-2026-10-11/runtime-before.json`.
+
 ### Leaf pointer optimization
 
 A later change lets proven noncollecting leaf helpers borrow their caller's roots,
@@ -361,6 +422,61 @@ different lowerings can produce different output. Use `--no-opt` with compilers
 that support the original cell lowering. A compiler-source corpus measures a
 rebuild's emission cost; OTP compilation and executable packaging remain outside
 this measurement. Avoid running tests or other benchmarks concurrently.
+
+### Pointer-free constant metadata — 2026-10-11
+
+Profiling the actual self-built compiler found 16,437,995 calls to the collector's
+`references/2` while checking the lexer corpus. A pointer inside the constant
+string representation made otherwise immutable checker/emitter metadata require
+tracing, including values with no rope at all.
+
+Large constant strings now use integer links into a package-local node table.
+Checked results retain that table. Shared-prefix comparisons still skip identical
+nodes, and byte materialization looks nodes up explicitly. Keeping the table flat
+also bounds generic scans in the cell backend: nested native trees would let a
+generic root walk repeatedly expand shared subtrees.
+
+Actual verified before/after archives, an unchanged frozen lexer corpus and path,
+macOS ARM64 / OTP 29.1.1, one scheduler, seven measured samples and two warmups
+per compiler, with interleaved order and no concurrent builds/tests:
+
+| Metric | Before | After |
+| --- | ---: | ---: |
+| Median milliseconds | 861.306 | 521.400 |
+| Median BEAM reductions | 160654476 | 36176181 |
+| Managed allocations | 242214 | 242493 |
+| Peak live cells | 384 | 398 |
+| Managed collections | 946 | 947 |
+
+Median latency fell 39.5% and reductions 77.5%. Allocations did not fall: this
+change removes traversal cost. A separate instrumented profile counted 77,790
+`references/2` calls afterward (99.5% fewer). Its timings are not benchmark
+timings; the table above comes from uninstrumented self-built archives.
+
+Every measured run emitted the same 82,614 bytes, SHA-256
+`fcd8de8ed8519c69e43a046be529c9e84f7589588aee65f8d66b2cef7685f4f0`,
+and finished with zero managed cells and roots. These small local samples are
+not a production throughput claim or a CI performance threshold.
+
+The new archive also emitted the complete current `bootstrap/emitter` corpus in
+13.706 seconds median (three isolated samples plus one warmup; range
+13.609–13.865 seconds). Each run allocated 4,768,870 managed cells, peaked at 421,
+and finished with zero cells/roots. This is emission only: OTP compilation,
+packaging, and acceptance suites are excluded. It is an after-only measurement,
+not a controlled full-rebuild speedup comparison. The report is
+`compiler-rebuild-after.json` in the directory below.
+
+The Go-free proof completed from the previous verified compiler, with byte-identical
+B/C emission of 1,860,236 bytes, SHA-256
+`c5dee594d6da01727025ed51c0553d8e556aab159f716258a03d50dfbae1bf8c`.
+All 70 C acceptance test executions passed, including forced GC and both lowerings
+for the concurrency/language suites. The independent constant oracle and materialized-string
+emission test passed in both compiler modes; the Go-seeded cell checker suite and
+separate constant-result lifetime test passed under forced GC as well.
+
+Reports and verified archives are under `_build/perf-2026-10-11/`:
+`compiler-comparison.json`, `profile-before.json`, `profile-after.json`, and
+`selfhost-proof.log`. These ignored local artifacts are not included in Git.
 
 ### Native bootstrap range cursors — 2026-10-05
 

@@ -94,6 +94,13 @@ isolation; the Go-free proof runs them with both lowerings and forced collection
 execution honor an operator's scheduler configuration even when their compiler
 parent runs with one scheduler.
 
+`TestArchiveProfiler` exercises the OTP-only archive profiler with a small OTP
+fixture: compiler arguments, decoded function names and call counts, allocation
+cleanup, failures, and deadlines. It runs with `go test ./cmd/bench`; the profiler
+itself requires no Go. Correctness tests have no timing thresholds. Follow the
+[profiling workflow](self-hosting.md#profile-the-compiler-without-go) and keep heavy
+tests separate from uninstrumented performance measurements.
+
 
 Developer tools are tested by `TestBootstrapCLI/.*/developer_tools` against both
 lowerings under an OTP-only PATH, and by the generation-C proof. Checks cover

@@ -17,7 +17,12 @@ import (
 
 func TestBootstrapEmitterPrograms(t *testing.T) {
 	type fixture struct{ name, code, want, failure string }
+	ropeConstants := `const S0="ab";`
+	for i := 1; i <= 13; i++ {
+		ropeConstants += fmt.Sprintf("const S%d=S%d+S%d;", i, i-1, i-1)
+	}
 	fixtures := []fixture{
+		{"local_constant_rope", ropeConstants + `func observe(s string){println(len(s),slice(s,0,2),slice(s,len(s)-1,len(s)))};func main(){observe(S13+"!")}`, "16385 ab !\n", ""},
 		{"local_multiple_results", multipleResultsFixture, "multiple results ok\n", ""},
 		{"if_initializers", ifInitializerFixture, "if initializers ok\n", ""},
 		{"otp_server_calls", otpServerFixture, otpServerOutput, ""},

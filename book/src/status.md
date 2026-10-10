@@ -50,9 +50,16 @@ still change.
 ## Next acceptance criteria
 
 1. **Toolchain quality.** Run the OS/OTP compatibility matrix, extend differential
-   package tests, and reduce self-hosted test packaging overhead. The [Go-free rebuild](self-hosting.md)
-   checks a fixed point and runs language suites; port the remaining developer
-   tools, particularly the language server and release packaging. Extend package API
+   package tests, and reduce measured compiler and self-hosted test packaging costs.
+   The [OTP-only profiler](self-hosting.md#profile-the-compiler-without-go) can inspect
+   shipped archives; pair profiles with unchanged-corpus timing and forced-GC tests.
+   Measure application workloads emitted by the self-built compiler as well as
+   the Go seed before extending its native-local optimizations.
+   The [Go-free rebuild](self-hosting.md)
+   checks a fixed point and runs language suites. Move application release
+   orchestration into Linglang next, retaining OTP's packaging machinery, then
+   port the language server. Close the positional-literal and allocation-form
+   gaps against the independent seed oracle. Extend package API
    inspection and multi-error diagnostics. Keep the two formatter contracts explicit and extend source-preservation tests.
 2. **Package distribution.** Specify package identity, versions, integrity,
    lockfiles, and license metadata before adding remote fetching and a registry.

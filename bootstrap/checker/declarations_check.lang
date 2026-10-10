@@ -252,5 +252,5 @@ func checkPackageInfo(files List[SyntaxNode], record bool) CheckResult {
 		}
 	}
 	bindings = completeMapBindings(&c, bindings)
-	return CheckResult{ok: c.reason == "", reason: c.reason, at: c.at, constants: constants, expressions: c.expressions, definitions: c.definitions, types: c.types, bindings: bindings}
+	return CheckResult{ok: c.reason == "", reason: c.reason, at: c.at, constants: constants, expressions: c.expressions, definitions: c.definitions, types: c.types, bindings: bindings, stringNodes: c.stringNodes}
 }

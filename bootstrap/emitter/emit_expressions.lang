@@ -73,7 +73,7 @@ func emitConstant(e *Emitter, node SyntaxNode, value ConstantValue) string {
 			emitFail(e, node.at, "bootstrap emitter string literal exceeds 1 MiB")
 			return ""
 		}
-		return emitBinaryString(constantStringBytes(value))
+		return emitBinaryString(constantStringBytes(value, e.checked.stringNodes))
 	}
 	emitFail(e, node.at, "unsupported constant")
 	return ""

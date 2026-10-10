@@ -205,15 +205,52 @@ func TestConstantStringChunks() {
 		text += text
 	}
 	assert(c.reason == "")
-	assert(constantStringBytes(value) == text)
+	assert(constantStringBytes(value, c.stringNodes) == text)
 	splitValue := concatenateConstantStrings(&c, node, constantString(slice(text, 0, 3)), constantString(slice(text, 3, len(text))))
-	assert(compareConstantStrings(value, splitValue) == 0)
-	assert(compareConstantStrings(value, constantString("")) > 0)
-	assert(compareConstantStrings(constantString(""), value) < 0)
-	assert(compareConstantStrings(value, concatenateConstantStrings(&c, node, value, constantString("a"))) < 0)
-	assert(compareConstantStrings(concatenateConstantStrings(&c, node, value, constantString("a")), value) > 0)
-	assert(compareConstantStrings(value, constantString("c")) < 0)
-	assert(compareConstantStrings(value, constantString("aa")) > 0)
+	assert(compareConstantStrings(value, splitValue, c.stringNodes) == 0)
+	assert(compareConstantStrings(value, constantString(""), c.stringNodes) > 0)
+	assert(compareConstantStrings(constantString(""), value, c.stringNodes) < 0)
+	assert(compareConstantStrings(value, concatenateConstantStrings(&c, node, value, constantString("a")), c.stringNodes) < 0)
+	assert(compareConstantStrings(concatenateConstantStrings(&c, node, value, constantString("a")), value, c.stringNodes) > 0)
+	assert(compareConstantStrings(value, constantString("c"), c.stringNodes) < 0)
+	assert(compareConstantStrings(value, constantString("aa"), c.stringNodes) > 0)
+}
+
+func TestConstantStringBranchIdentity() {
+	c := Checker{}
+	node := SyntaxNode{}
+	prefix := constantString("x")
+	for i := 0; i < 13; i++ {
+		prefix = concatenateConstantStrings(&c, node, prefix, prefix)
+	}
+	// Distinct nodes with the same shared prefix must still compare their tails.
+	left := concatenateConstantStrings(&c, node, prefix, constantString("a"))
+	right := concatenateConstantStrings(&c, node, prefix, constantString("b"))
+	same := concatenateConstantStrings(&c, node, prefix, constantString("a"))
+	assert(compareConstantStrings(left, right, c.stringNodes) < 0)
+	assert(compareConstantStrings(right, left, c.stringNodes) > 0)
+	assert(compareConstantStrings(left, same, c.stringNodes) == 0)
+	assert(constantStringLength(prefix) == 8192)
+	assert(constantStringLength(left) == 8193)
+	keys := recordConstantKey(ConstantKeys{}, left, c.stringNodes)
+	keys = recordConstantKey(keys, right, c.stringNodes)
+	assert(!keys.duplicate)
+	keys = recordConstantKey(keys, same, c.stringNodes)
+	assert(keys.duplicate)
+	assert(c.reason == "")
+}
+
+func TestConstantStringResultLifetime() {
+	base := stringDoublings(13)
+	first := checkedSource(base + "const Value=S13+\"a\";")
+	second := checkedSource(base + "const Value=S13+\"b\";")
+	assert(first.ok && second.ok)
+	// Each result retains its own nodes after later checks reuse local IDs.
+	a := constantStringBytes(get(first.constants, "Value").value, first.stringNodes)
+	b := constantStringBytes(get(second.constants, "Value").value, second.stringNodes)
+	assert(len(a) == 8193 && len(b) == 8193)
+	assert(slice(a, 0, 8192) == slice(b, 0, 8192))
+	assert(slice(a, 8192, 8193) == "a" && slice(b, 8192, 8193) == "b")
 }
 
 func TestRuntimeRuneContexts() {
