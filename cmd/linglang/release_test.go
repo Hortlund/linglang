@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,14 @@ func TestReleaseCLI(t *testing.T) {
 	if out, err := exec.CommandContext(ctx, "go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build CLI: %v\n%s", err, out)
 	}
+	testReleaseDriver(t, binary, nil, false)
+}
+
+func testBootstrapRelease(t *testing.T, cli string, env []string) {
+	testReleaseDriver(t, cli, env, true)
+}
+
+func testReleaseDriver(t *testing.T, binary string, buildEnv []string, bootstrap bool) {
 	// There is nothing on PATH at runtime: startup must use the bundled VM and
 	// system utilities directly, without finding Go or Erlang through PATH.
 	var isolatedEnv []string
@@ -56,7 +65,7 @@ func TestReleaseCLI(t *testing.T) {
 			args = append(args, "--no-opt")
 		}
 		args = append(args, source)
-		out, stderr, err := invoke(work, nil, binary, args...)
+		out, stderr, err := invoke(work, buildEnv, binary, args...)
 		if err != nil || !strings.Contains(out, "Built runtime release in "+artifact) {
 			t.Fatalf("release: %v\n%s\n%s", err, out, stderr)
 		}
@@ -71,6 +80,10 @@ func TestReleaseCLI(t *testing.T) {
 		if matches, _ := filepath.Glob(filepath.Join(moved, "erts-*", "bin", "beam.smp")); len(matches) != 1 {
 			t.Fatalf("missing bundled VM: %v", matches)
 		}
+		license, err := os.ReadFile(filepath.Join(moved, "OTP_LICENSE.txt"))
+		if err != nil || string(license) != otpLicense {
+			t.Fatalf("OTP license differs: %v", err)
+		}
 		return moved
 	}
 	for _, baseline := range []bool{false, true} {
@@ -79,6 +92,32 @@ func TestReleaseCLI(t *testing.T) {
 			name = "baseline"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Run("stdin", func(t *testing.T) {
+				work := t.TempDir()
+				source := filepath.Join(work, "stdin.lang")
+				program := `package main
+func main(){var data string;for{input:=readFile("/dev/stdin");assert(input.ok);if len(input.value)==0{break};data+=input.value};assert(writeFile(head(args()).value,data).ok);println(len(data))}`
+				if err := os.WriteFile(source, []byte(program), 0600); err != nil {
+					t.Fatal(err)
+				}
+				bundle := makeRelease(t, source, work, baseline)
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				saved := filepath.Join(work, "stdin.bytes")
+				cmd := exec.CommandContext(ctx, filepath.Join(bundle, "bin", "run"), saved)
+				cmd.Env, cmd.Dir = isolatedEnv, t.TempDir()
+				input := strings.Repeat("snow 雪\x00\xff\n", 10000)
+				cmd.Stdin = strings.NewReader(input)
+				var stdout, stderr bytes.Buffer
+				cmd.Stdout, cmd.Stderr = &stdout, &stderr
+				if err := cmd.Run(); err != nil || stdout.String() != strconv.Itoa(len(input))+"\n" || !strings.Contains(stderr.String(), "live_cells => 0") {
+					t.Fatalf("release stdin: %v, %d output bytes\n%s", err, stdout.Len(), stderr.String())
+				}
+				data, err := os.ReadFile(saved)
+				if err != nil || string(data) != input {
+					t.Fatalf("stdin bytes changed: %v, %d bytes", err, len(data))
+				}
+			})
 			t.Run("arguments_workers_and_failures", func(t *testing.T) {
 				work := t.TempDir()
 				source := filepath.Join(work, "beans.lang")
@@ -207,12 +246,15 @@ func main() {
 		if err := os.WriteFile(source, original, 0644); err != nil {
 			t.Fatal(err)
 		}
-		out, stderr, err := invoke(work, nil, binary, "release", source)
+		out, stderr, err := invoke(work, buildEnv, binary, "release", source)
 		archive := filepath.Join(work, "bean-"+runtime.GOOS+"-"+runtime.GOARCH+".tar.gz")
-		if err != nil || !strings.Contains(out, archive) {
+		if bootstrap {
+			archive = filepath.Join(work, "program.tar.gz")
+		}
+		if err != nil || !strings.Contains(out, filepath.Base(archive)) {
 			t.Fatalf("default output: %v\n%s\n%s", err, out, stderr)
 		}
-		_, stderr, err = invoke(work, nil, binary, "release", "-o", source, source)
+		_, stderr, err = invoke(work, buildEnv, binary, "release", "-o", source, source)
 		if err == nil || !strings.Contains(stderr, "refusing to overwrite source") {
 			t.Fatalf("source overwrite allowed: %v\n%s", err, stderr)
 		}
@@ -224,6 +266,10 @@ func main() {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if bootstrap {
+			testReleaseFailures(t, binary, buildEnv, work, source, archive, old)
+			return
+		}
 		_, stderr, err = invoke(work, isolatedEnv, binary, "release", "-o", archive, source)
 		if err == nil || !strings.Contains(stderr, "erl is not on PATH") {
 			t.Fatalf("missing OTP: %v\n%s", err, stderr)
@@ -233,6 +279,74 @@ func main() {
 			t.Fatal("failed release changed existing archive")
 		}
 	})
+}
+
+func testReleaseFailures(t *testing.T, cli string, env []string, work, source, archive string, old []byte) {
+	t.Helper()
+	invoke := func(args ...string) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, cli, args...)
+		cmd.Env, cmd.Dir = env, work
+		if out, err := cmd.CombinedOutput(); err == nil || ctx.Err() != nil {
+			t.Fatalf("expected prompt failure for %v: %v\n%s", args, err, out)
+		}
+		data, err := os.ReadFile(archive)
+		if err != nil || !bytes.Equal(data, old) {
+			t.Fatal("failed release changed the existing archive")
+		}
+	}
+	for _, args := range [][]string{
+		{"release", "--json", source}, {"release", "--timeout", "1s", source},
+		{"release", "--tests", source}, {"release", "-o"}, {"release", source, "--", "arg"},
+		{"release", "-o", archive, "missing.lang"},
+	} {
+		invoke(args...)
+	}
+	bad := filepath.Join(work, "bad.lang")
+	if err := os.WriteFile(bad, []byte("package main\nfunc main(){ missing() }"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	invoke("release", "-o", archive, bad)
+	// Protection includes imported sources and aliases, not just the root input.
+	dep := filepath.Join(work, "dep")
+	if err := os.Mkdir(dep, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dependency := filepath.Join(dep, "value.lang")
+	original := []byte("package dep\nfunc Value() int { return 42 }\n")
+	if err := os.WriteFile(dependency, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte("package main\nimport \"./dep\"\nfunc main(){println(dep.Value())}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(work, "alias.tar.gz")
+	hard := filepath.Join(work, "hard.tar.gz")
+	if err := os.Symlink(dependency, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(dependency, hard); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{dependency, link, hard} {
+		invoke("release", "-o", target, source)
+		data, err := os.ReadFile(target)
+		if err != nil || !bytes.Equal(data, original) {
+			t.Fatal("protected source changed")
+		}
+	}
+	// Reach publication, then fail renaming over a directory. No staging files
+	// should remain alongside the destination after the handled failure.
+	target := filepath.Join(work, "occupied")
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	invoke("release", "-o", target, source)
+	if files, _ := filepath.Glob(filepath.Join(work, ".linglang-*")); len(files) != 0 {
+		t.Fatalf("staging files leaked: %v", files)
+	}
 }
 
 func unpackRelease(t *testing.T, path, destination string) {

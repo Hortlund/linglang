@@ -1,0 +1,128 @@
+package main
+
+func flowNested(flag bool) int {
+	total := 0
+	outer := 0
+	for outer < 4 {
+		outer++
+		for inner := 0; inner < 5; inner++ {
+			if inner == 1 {
+				total += 10
+				continue
+			}
+			if inner == 3 {
+				total++
+				break
+			}
+			total += outer
+		}
+	}
+	if extra := 2; flag {
+		total += extra
+	} else {
+		total -= extra
+	}
+	{
+		total := 99
+		assert(total == 99)
+	}
+	return total
+}
+
+func flowEarly(n int) int {
+	for i := 0; ; i++ {
+		for j := 0; j < 5; j++ {
+			if i+j == n {
+				return i*10 + j
+			}
+			if j == 2 {
+				break
+			}
+		}
+		if i > n {
+			return -1
+		}
+	}
+}
+
+func flowMutations(n int) int {
+	a, b := 1, 2
+	for i, j := 0, 6; i < j; i, j = i+1, j-1 {
+		a, b = b, a+b
+		if i == 1 {
+			n += 10
+			continue
+		}
+		n += a
+	}
+	a, a = a+1, a+2
+	return n + a + b
+}
+
+func flowZeroes() int {
+	total := 0
+	for i := 0; i < 4; i++ {
+		var x int
+		assert(x == 0)
+		{
+			var a int = i
+			var b int = a + 1
+			total += b
+		}
+		x = i
+		total += x
+	}
+	return total
+}
+
+// A native caller must retain safepoints around calls that allocate. Its caller's
+// managed pointers remain rooted even though its own state is purely primitive.
+func flowAllocate(n int) int {
+	p := &IterationNode{value: n}
+	iterationChurn()
+	return p.value
+}
+
+func flowCollectingLoop(n int) int {
+	total := 0
+	for i := 0; i < n; i++ {
+		total += flowAllocate(i)
+	}
+	return total
+}
+
+func flowOverflow() bool {
+	n := 9223372036854775807
+	for i := 0; i < 2; i++ {
+		n++
+	}
+	if n != -9223372036854775807 {
+		return false
+	}
+	n = -1
+	n >>= 64
+	if n != -1 {
+		return false
+	}
+	n <<= 64
+	return n == 0
+}
+
+func flowPostBody() int {
+	steps := 0
+	for i := 0; i < 6; i++ {
+		i++
+		steps += i
+	}
+	return steps
+}
+
+func TestNativeControlFlow() {
+	assert(flowNested(true) == 66 && flowNested(false) == 62)
+	assert(flowEarly(0) == 0 && flowEarly(4) == 22)
+	assert(flowMutations(0) == 32)
+	assert(flowZeroes() == 16 && flowOverflow() && flowPostBody() == 9)
+	p := iterationNode(41)
+	assert(flowCollectingLoop(8) == 28)
+	assert(p.value == 41)
+}

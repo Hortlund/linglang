@@ -25,10 +25,10 @@ func emitAssignResults(e *Emitter, targets List[SyntaxNode], code string) string
 	if len(targets) == 1 {
 		target := head(targets).value
 		if target.text == "_" {
-			return emitScope(code)
+			return emitLocalScope(e, code)
 		}
 		emitRequireType(e, emitDefinition(e, target).typeID, target.at)
-		return emitDeclareLocal(e, target, emitScope(code))
+		return emitDeclareLocal(e, target, emitLocalScope(e, code))
 	}
 	var setup List[string]
 	var captured List[string]
@@ -38,7 +38,7 @@ func emitAssignResults(e *Emitter, targets List[SyntaxNode], code string) string
 		definition := get(e.checked.definitions, sourceIdentity(target.at))
 		if target.text != "_" && !definition.ok && !get(e.valueLocals, emitLocalKey(e, target)).value {
 			address := emitFresh(e)
-			setup = append(setup, address+" = linglang_rt:keep("+emitAddress(e, target)+")")
+			setup = append(setup, address+" = "+emitHold(e, emitAddress(e, target)))
 			captured = append(captured, address)
 			addresses = put(addresses, index, len(captured))
 		}
@@ -50,7 +50,7 @@ func emitAssignResults(e *Emitter, targets List[SyntaxNode], code string) string
 	setup = append(setup, "{"+join(captured, ", ")+"}")
 	bundle := emitFresh(e)
 	var writes List[string]
-	writes = append(writes, bundle+" = "+emitScope(join(setup, ", ")))
+	writes = append(writes, bundle+" = "+emitLocalScope(e, join(setup, ", ")))
 	values := "element(" + formatInt(len(captured)) + ", " + bundle + ")"
 	index = 0
 	for _, target := range targets {

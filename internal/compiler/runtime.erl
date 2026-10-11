@@ -7,7 +7,7 @@
          list_tail/1, list_first/1, list_more/1, list_range/4,
          map_length/1, map_get/3, map_put/3, map_remove/2,
          read_file/1, write_file/2, text_split/2, text_trim/1,
-         source_files/1, module_files/1, monotonic_millis/0, module_path/2, test_files/1, run_test_program/5, run_test_program_result/6, tool_report/2, build_program/5, run_program/4, bootstrap_main/3, bootstrap_run_main/4,
+         source_files/1, module_files/1, monotonic_millis/0, module_path/2, test_files/1, run_test_program/5, run_test_program_result/6, tool_report/2, build_program/5, release_program/6, release_package/3, run_program/4, bootstrap_main/3, bootstrap_run_main/4,
          parse_int/1, format_int/1, arguments/0, set_arguments/1, assert_value/3,
          text_byte/2, text_slice/3, text_join/2, text_rune/2, unicode_letter/1, unicode_digit/1,
          scope/1, keep/1, roots/1, safepoint/0, collect/0, stats/0, set_gc_stress/1,
@@ -432,6 +432,123 @@ build_program(Source, Path, Inputs, Stress, Stats, OwnedRun) ->
     catch throw:{bootstrap_error, Reason} -> io_result(false, Reason)
     end.
 
+%% OTP packaging adapter; source discovery/checking and command options belong
+%% to the Linglang driver. Run in this VM: no external compiler or child lifetime.
+release_program(Source, Path, Inputs, License, Stress, Stats) ->
+    try
+        OS = case os:type() of
+            {unix, darwin} -> "darwin";
+            {unix, linux} -> "linux";
+            _ -> bootstrap_error(<<"runtime releases require Linux or macOS">>)
+        end,
+        System = erlang:system_info(system_architecture),
+        Arch = case string:split(System, "-") of
+            ["aarch64" | _] -> "arm64";
+            ["x86_64" | _] -> "amd64";
+            [Other | _] -> Other
+        end,
+        protect_inputs(Path, list_items(Inputs)),
+        Beam = compile_module(Source, linglang_program),
+        Launcher = iolist_to_binary(io_lib:format(
+            "-module(linglang_cli).\n-export([start/0]).\nstart() -> linglang_rt:bootstrap_main(init:get_plain_arguments(), ~p, ~p).\n", [Stress, Stats])),
+        CLI = compile_module(Launcher, linglang_cli),
+        Dir = temporary_directory(),
+        try
+            AppDir = filename:join([Dir, <<"lib">>, <<"linglang-1">>, <<"ebin">>]),
+            require_io(filelib:ensure_dir(filename:join(AppDir, <<"linglang.app">>))),
+            Runtime = [begin
+                {Module, Binary, _} = code:get_object_code(Module),
+                {atom_to_list(Module) ++ ".beam", Binary}
+            end || Module <- [linglang_rt, linglang_sup, linglang_server, linglang_io]],
+            lists:foreach(fun({Name, Bytes}) ->
+                require_io(file:write_file(filename:join(AppDir, Name), Bytes))
+            end, [{"linglang_program.beam", Beam}, {"linglang_cli.beam", CLI} | Runtime]),
+            App = <<"{application, linglang, [{description, \"linglang program\"}, {vsn, \"1\"}, {modules, [linglang_cli, linglang_program, linglang_rt, linglang_sup, linglang_server, linglang_io]}, {registered, []}, {applications, [kernel, stdlib]}]}.\n">>,
+            require_io(file:write_file(filename:join(AppDir, <<"linglang.app">>), App)),
+            require_io(file:write_file(filename:join(Dir, <<"OTP_LICENSE.txt">>), License)),
+            release_package(unicode:characters_to_list(Dir), OS, Arch),
+            Archive = require_io(file:read_file(filename:join(Dir, <<"linglang.tar.gz">>))),
+            protect_inputs(Path, list_items(Inputs)),
+            publish_file(Path, Archive, 8#644)
+        after file:del_dir_r(Dir) end,
+        io_result(true, <<>>)
+    catch
+        throw:{bootstrap_error, Reason} -> io_result(false, Reason);
+        Class:Reason -> io_result(false, iolist_to_binary(io_lib:format("OTP release creation failed: ~p:~tp", [Class, Reason])))
+    end.
+
+%% Shared by the seed release builder and the self-hosted adapter. OTP's systools
+%% selects runtime files; no language logic or external shell commands live here.
+release_package(Stage, OS, Arch) ->
+    Root = code:root_dir(),
+    ERTS = erlang:system_info(version),
+    System = erlang:system_info(system_architecture),
+    release_check_architecture(Arch, System),
+    Kernel = release_app_version(kernel),
+    Stdlib = release_app_version(stdlib),
+    Name = filename:join(Stage, "linglang"),
+    Release = {release, {"linglang", "1"}, {erts, ERTS},
+               [{kernel, Kernel}, {stdlib, Stdlib}, {linglang, "1"}]},
+    ok = file:write_file(Name ++ ".rel", io_lib:format("~tp.~n", [Release])),
+    AppPath = filename:join([Stage, "lib", "linglang-1", "ebin"]),
+    Options = [silent, no_warn_sasl, {path, [AppPath]}],
+    {ok, _, []} = systools:make_script(Name, [no_dot_erlang | Options]),
+    Launcher = filename:join(Stage, "run"),
+    ok = file:write_file(Launcher, release_launcher(ERTS)),
+    ok = file:change_mode(Launcher, 8#755),
+    Readme = filename:join(Stage, "README.txt"),
+    ok = file:write_file(Readme, io_lib:format(
+        "linglang runtime release (~s/~s, OTP ~s, ERTS ~s)~n"
+        "Bundled runtime target: ~s~n"
+        "Run: ./bin/run [program arguments...]~n"
+        "Includes Erlang/OTP; no Go or Erlang installation is required.~n"
+        "Targets the build host OS/architecture and compatible system libraries.~n"
+        "Relative data paths use your working directory. Input data is not bundled.~n"
+        "Erlang/OTP: https://www.erlang.org/ (Apache License 2.0; see OTP_LICENSE.txt).~n",
+        [OS, Arch, erlang:system_info(otp_release), ERTS, System])),
+    Extras = [{Launcher, "bin/run"}, {Readme, "README.txt"},
+              {filename:join(Stage, "OTP_LICENSE.txt"), "OTP_LICENSE.txt"}],
+    {ok, _, []} = systools:make_tar(Name, [{erts, Root}, {extra_files, Extras} | Options]).
+
+release_app_version(App) ->
+    {ok, Version} = application:get_key(App, vsn),
+    Version.
+
+%% A native Go tool can encounter an Intel OTP installation under Rosetta (or
+%% vice versa). Refuse to label a bundle for the wrong architecture.
+release_check_architecture(Arch, System) when Arch == "amd64"; Arch == "arm64" ->
+    Prefix = case Arch of "amd64" -> "x86_64"; "arm64" -> "aarch64" end,
+    case lists:prefix(Prefix ++ "-", System) of
+        true -> ok;
+        false -> error({runtime_architecture_mismatch, Arch, System})
+    end;
+release_check_architecture(_, _) -> ok.
+
+%% Invoke erlexec directly: an installation's erl shell script can contain its
+%% original absolute paths. Use the system readlink by absolute path so symlink
+%% resolution also works with an empty PATH and no Erlang installation.
+release_launcher(ERTS) ->
+    io_lib:format(
+        "#!/bin/sh\n"
+        "case \"$0\" in */*) launcher=$0 ;; *) launcher=$(command -v \"$0\") ;; esac\n"
+        "readlink=/usr/bin/readlink\n"
+        "[ -x \"$readlink\" ] || readlink=/bin/readlink\n"
+        "links=0\n"
+        "while [ -L \"$launcher\" ]; do\n"
+        "    links=$((links + 1))\n"
+        "    if [ \"$links\" -gt 40 ]; then echo 'linglang: too many launcher symlinks' >&2; exit 1; fi\n"
+        "    directory=$(CDPATH= cd -- \"${launcher%/*}\" && pwd -P) || exit 1\n"
+        "    target=$(\"$readlink\" \"$launcher\") || exit 1\n"
+        "    case \"$target\" in /*) launcher=$target ;; *) launcher=$directory/$target ;; esac\n"
+        "done\n"
+        "ROOTDIR=$(CDPATH= cd -- \"${launcher%/*}/..\" && pwd -P) || exit 1\n"
+        "BINDIR=\"$ROOTDIR/erts-~s/bin\"\n"
+        "EMU=beam\n"
+        "PROGNAME=linglang\n"
+        "export ROOTDIR BINDIR EMU PROGNAME\n"
+        "exec \"$BINDIR/erlexec\" -boot \"$ROOTDIR/releases/1/start\" -noshell -s linglang_cli start -extra \"$@\"\n",
+        [ERTS]).
+
 protect_inputs(Path, Inputs) ->
     case file:read_file_info(Path) of
         {ok, Out} ->
@@ -469,13 +586,15 @@ parse_forms([{dot, _} = Dot | Rest], Current, Forms) ->
     end;
 parse_forms([Token | Rest], Current, Forms) -> parse_forms(Rest, [Token | Current], Forms).
 
-publish_executable(Path, Bytes) ->
+publish_executable(Path, Bytes) -> publish_file(Path, Bytes, 8#755).
+
+publish_file(Path, Bytes, Mode) ->
     require_io(filelib:ensure_dir(Path)),
     {Temp, File} = open_executable_temp(filename:dirname(Path)),
     try
         require_io(file:write(File, Bytes)),
         require_io(file:close(File)),
-        require_io(file:change_mode(Temp, 8#755)),
+        require_io(file:change_mode(Temp, Mode)),
         require_io(file:rename(Temp, Path))
     after file:close(File), file:delete(Temp)
     end.

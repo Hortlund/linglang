@@ -1,0 +1,59 @@
+package main
+
+// A leaf may omit managed scopes only if its complete lowering cannot allocate
+// a cell or collect. BEAM term allocation/GC is independent of managed cells.
+// Inspect unreachable syntax too; user-call spelling never proves safety.
+func emitLeafEligible(e *Emitter, function SyntaxNode) bool {
+	if e.noOpt {
+		return false
+	}
+	for _, field := range childAt(function, 1).children {
+		for _, name := range childAt(field, 0).children {
+			if name.text != "_" && !get(e.valueLocals, sourceIdentity(name.at)).value {
+				return false
+			}
+		}
+	}
+	pending := List[SyntaxNode]{childAt(function, 3)}
+	for head(pending).ok {
+		node := head(pending).value
+		pending = tail(pending)
+		switch node.kind {
+		case "ForStmt", "RangeStmt", "SwitchStmt":
+			return false
+		case "UnaryExpr":
+			if node.text == "&" {
+				return false
+			}
+		case "CallExpr":
+			callee := emitValue(e, emitCallee(childAt(node, 0)))
+			safe := callee.kind == "type"
+			if callee.kind == "native" || callee.kind == "intrinsic" {
+				switch callee.name {
+				case "assert", "panic", "len", "byteAt", "slice", "trim", "formatInt", "isLetter", "isDigit":
+					safe = true
+				}
+			}
+			if !safe {
+				return false
+			}
+		}
+		if node.kind == "Ident" {
+			definition := get(e.checked.definitions, sourceIdentity(node.at))
+			if definition.ok && definition.value.kind == "var" && node.text != "_" && !get(e.valueLocals, sourceIdentity(node.at)).value {
+				return false
+			}
+		}
+		value := get(e.checked.expressions, expressionIdentity(node))
+		if value.ok && value.value.kind == "value" {
+			id := defaultType(value.value.typeID)
+			if id != tVoid && id != tNil && !emitPrimitive(id) && get(e.checked.types, id).value.kind != "pointer" {
+				return false
+			}
+		}
+		for _, child := range node.children {
+			pending = prepend(child, pending)
+		}
+	}
+	return e.reason == ""
+}

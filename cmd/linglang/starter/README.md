@@ -17,15 +17,15 @@ Both application runs print `Counter: 5`. The first format command normalizes th
 starter sources for your compiler before checking their formatting.
 
 The installed compiler provides `init`, `fmt`, `check`, `emit`, `build`, `run`,
-`test`, `describe`, and `deps` using OTP alone. Executables produced by `build`
+`release`, `test`, `describe`, and `deps` using OTP alone. Executables produced by `build`
 also need OTP. No `linglang-bootstrap` alias or Go installation is required.
 See `AGENTS.md` for capability discovery, dependency locks, and structured checks.
 
 If you built the Go seed compiler from source instead, use its `pack` command in
 place of `build` above to create `counter.escript`; the seed's `build` produces a
-directory. The Go seed also provides `release` (an application bundle containing
-OTP for the current OS and CPU) and `lsp`. Those commands are unavailable in the
-installed self-hosted compiler. Use `linglang describe --json` to check the driver
+directory. Both drivers provide `release -o counter.tar.gz .` to bundle OTP for
+the current Linux/macOS host. Extract it and run `bin/run` without an OTP
+installation. The language server (`lsp`) still requires the Go seed. Use `linglang describe --json` to check the driver
 you are running.
 
 `counter.lang` defines the handler. `main.lang` starts a supervisor and makes a

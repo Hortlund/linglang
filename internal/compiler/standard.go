@@ -39,6 +39,7 @@ func runTestProgramResult(source string, arguments List[string], stress bool, st
 func runTestProgram(source string, arguments List[string], stress bool, stats bool, timeout int) IOResult { return IOResult{} }
 func moduleFiles(path string) FilesResult { return FilesResult{} }
 func sourceFiles(paths List[string]) FilesResult { return FilesResult{} }
+func releaseProgram(source string, path string, inputs List[string], license string, stress bool, stats bool) IOResult { return IOResult{} }
 func buildProgram(source string, path string, inputs List[string], stress bool, stats bool) IOResult { return IOResult{} }
 func runProgram(source string, arguments List[string], stress bool, stats bool) IOResult { return IOResult{} }
 func readFile(path string) TextResult { return TextResult{} }
@@ -77,7 +78,7 @@ func (c *compiler) standardCall(call *ast.CallExpr) (string, bool, error) {
 		"makeDirectories": "io:make_directories", "writeNewFile": "io:write_new_file", "replaceFile": "io:replace_file",
 		"monotonicMillis": "monotonic_millis", "modulePath": "module_path", "testFiles": "test_files", "runTestProgram": "run_test_program",
 		"toolReport": "tool_report", "runTestProgramResult": "run_test_program_result",
-		"moduleFiles": "module_files", "sourceFiles": "source_files", "buildProgram": "build_program", "runProgram": "run_program",
+		"moduleFiles": "module_files", "sourceFiles": "source_files", "buildProgram": "build_program", "releaseProgram": "release_program", "runProgram": "run_program",
 		"tcpListen":   "io:tcp_listen",
 		"tcpConnect":  "io:tcp_connect",
 		"tcpAccept":   "io:tcp_accept",

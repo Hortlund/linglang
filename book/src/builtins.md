@@ -114,6 +114,12 @@ partially complete on an I/O failure. Tools own traversal and editing policy.
 `buildProgram(source, path, inputs, stress, stats)` compiles generated Erlang and
 packages an executable. `runProgram(source, arguments, stress, stats)` builds
 and runs generated Erlang in a child VM. Both return `IOResult`.
+`releaseProgram(source, path, inputs, license, stress, stats)` returns `IOResult`
+and bundles the running OTP installation for Linux/macOS. `license` supplies the
+OTP license bytes embedded by the driver. It protects the supplied source paths
+(including aliases), publishes atomically, and preserves existing output on
+failure. This adapter runs OTP packaging in the current VM with no deadline;
+see [self-hosted releases](self-hosting.md#bundle-an-application-with-otp).
 
 `moduleFiles(path)` returns the same `FilesResult`, requires a package directory,
 and excludes `_test.lang` files. It rejects individual file targets.

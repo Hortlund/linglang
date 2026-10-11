@@ -49,7 +49,7 @@ func release(path, program string, gcStress, gcStats bool) error {
 	if err := buildSources(filepath.Join(dir, "builder"), map[string]string{"linglang_release_builder.erl": releaseBuilder}); err != nil {
 		return err
 	}
-	cmd := exec.Command("erl", "-noshell", "-pa", filepath.Join(dir, "builder"), "-s", "linglang_release_builder", "build", "-extra", dir, runtime.GOOS, runtime.GOARCH)
+	cmd := exec.Command("erl", "-noshell", "-pa", filepath.Join(dir, "builder"), "-pa", appDir, "-s", "linglang_release_builder", "build", "-extra", dir, runtime.GOOS, runtime.GOARCH)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("OTP release creation failed: %w\n%s", err, out)
 	}

@@ -1,0 +1,96 @@
+package main
+
+type FlowNode struct {
+	value int
+	next  *FlowNode
+}
+
+type FlowBundle struct {
+	items  List[*FlowNode]
+	lookup Map[int, *FlowNode]
+}
+
+func flowNode(n int) *FlowNode         { return &FlowNode{value: n} }
+func flowIncrement(p *FlowNode)        { p.value++ }
+func flowSet(p *FlowNode, q *FlowNode) { p.next = q }
+func flowChurn() {
+	for i := 0; i < 40; i++ {
+		p := flowNode(i)
+		assert(p.value == i)
+	}
+}
+func flowParameter(n int) *int {
+	p := &n
+	for i := 0; i < 3; i++ {
+		n++
+		flowChurn()
+		assert(*p == n)
+	}
+	return p
+}
+func flowPair(p *FlowNode, q *FlowNode) (*FlowNode, *FlowNode) {
+	for i := 0; i < 2; i++ {
+		flowChurn()
+		p, q = q, p
+	}
+	return p, q
+}
+func flowFirst(p *FlowNode, n int) *FlowNode { assert(n == 0); return p }
+func flowEffect() int                        { flowChurn(); return 0 }
+func TestMixedFlow() {
+	root := FlowNode{value: 7}
+	alias := &root
+	interior := &root.value
+	outer := 0
+	outerAddress := &outer
+	for i := 0; i < 8; i++ {
+		outer = i
+		flowChurn()
+		assert(*outerAddress == i && &root == alias)
+		if i == 1 {
+			continue
+		}
+		flowIncrement(&root)
+		if i == 5 {
+			break
+		}
+	}
+	assert(root.value == 12 && *interior == 12 && outer == 5)
+	p, q := flowNode(1), flowNode(2)
+	flowSet(p, p)
+	bundle := FlowBundle{items: List[*FlowNode]{p}, lookup: Map[int, *FlowNode]{1: q}}
+	for i := 0; i < 3; i++ {
+		p, q = flowPair(q, p)
+		flowChurn()
+		assert(head(bundle.items).value.next == head(bundle.items).value)
+		assert(get(bundle.lookup, 1).value.value == 2)
+	}
+	assert(p.value == 2 && q.value == 1)
+	// The first temporary must survive collection while evaluating the second.
+	for i := 0; i < 3; i++ {
+		assert(flowFirst(flowNode(9), flowEffect()).value == 9)
+	}
+	var saved List[*int]
+	for i := 0; i < 3; i++ {
+		n := i
+		saved = prepend(&n, saved)
+	}
+	flowChurn()
+	assert(*head(saved).value == 2 && *head(tail(saved)).value == 1)
+	assert(head(saved).value != head(tail(saved)).value)
+	assert(*flowParameter(9) == 12)
+	flowIterationFallback()
+}
+
+func flowIterationFallback() {
+	// Addressed loop initializers still require the reference path.
+	var first, second *int
+	for i := 0; i < 2; i++ {
+		if i == 0 {
+			first = &i
+		} else {
+			second = &i
+		}
+	}
+	assert(first != second && *first == 0 && *second == 1)
+}

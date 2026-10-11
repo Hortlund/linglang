@@ -24,7 +24,7 @@ evidence.
 | Local dependency content lock | `deps [--check] [--json]` | `deps [--check] [--json]` |
 | Project creation and formatting | `init`, `fmt` (Go printer) | `init`, `fmt` (Linglang token formatter) |
 | Language server | `lsp` | No |
-| Bundle ERTS/OTP for Linux/macOS | `release` | No |
+| Bundle ERTS/OTP for Linux/macOS | `release` | `release` (default `program.tar.gz`) |
 | Rebuild and verify an existing compiler without Go | Independent seed oracle | `tools/bootstrap.escript`, using OTP build glue |
 | Remote packages, dependency solver/registry | No | No |
 | TLS, general HTTP framework, PostgreSQL | No | No |
@@ -53,12 +53,21 @@ still change.
    package tests, and reduce measured compiler and self-hosted test packaging costs.
    The [OTP-only profiler](self-hosting.md#profile-the-compiler-without-go) can inspect
    shipped archives; pair profiles with unchanged-corpus timing and forced-GC tests.
-   Measure application workloads emitted by the self-built compiler as well as
-   the Go seed before extending its native-local optimizations.
+   The application harness now compares programs emitted by self-built archives
+   with the Go seed, Erlang, Elixir, and Go, retaining inputs, artifacts, and hashes. Use its
+   paired archive mode before extending native-local optimizations. Primitive-only
+   functions now use native loop/branch/return edges without managed local cells;
+   eligible mixed-value loop functions now pass ordinary locals on native edges
+   and replace live roots before block safepoints, keeping addressed locals in
+   stable cells. Addressed loop initializers, range, switches, and indirect/field
+   assignments retain the earlier lowering. Unchanged, unaddressed pointer parameters now use native
+   values rooted for the call; proven nonallocating/noncollecting leaf helpers
+   omit scopes, keeps, and safepoints. Measure remaining fallback control flow and root-snapshot costs before
+   widening either proof.
    The [Go-free rebuild](self-hosting.md)
-   checks a fixed point and runs language suites. Move application release
-   orchestration into Linglang next, retaining OTP's packaging machinery, then
-   port the language server. Close the positional-literal and allocation-form
+   checks a fixed point and runs language suites. Application release orchestration
+   now belongs to the Linglang driver with shared OTP packaging machinery. Port
+   the language server next. Close the positional-literal and allocation-form
    gaps against the independent seed oracle. Extend package API
    inspection and multi-error diagnostics. Keep the two formatter contracts explicit and extend source-preservation tests.
 2. **Package distribution.** Specify package identity, versions, integrity,

@@ -32,7 +32,7 @@ type sample struct {
 	ResultCount      *int    `json:"result_count,omitempty"`
 }
 
-var workloads = []string{"arithmetic", "calls", "structs", "pointers", "lists", "maps", "strings", "messages"}
+var workloads = []string{"arithmetic", "calls", "structs", "pointers", "lists", "maps", "strings", "messages", "prime_jobs"}
 var variants = []string{"cells", "optimized", "erlang"}
 var comparisonVariants = []string{"optimized", "erlang", "elixir", "go"}
 
@@ -42,6 +42,7 @@ type config struct {
 	sourceDir, dir  string
 	output          string
 	compare         bool
+	compilers       compilerFlags
 }
 
 type summary struct {
@@ -52,6 +53,11 @@ type summary struct {
 }
 
 type report struct {
+	SchemaVersion     int                 `json:"schemaVersion,omitempty"`
+	Compilers         []compilerArtifact  `json:"compilers,omitempty"`
+	Inputs            []fileArtifact      `json:"inputs,omitempty"`
+	Generated         []fileArtifact      `json:"generated,omitempty"`
+	BuildDir          string              `json:"build_dir,omitempty"`
 	Timestamp         string              `json:"timestamp"`
 	Platform          string              `json:"platform"`
 	OTP               string              `json:"otp"`
@@ -84,13 +90,17 @@ func run() error {
 	output := flag.String("out", "_build/benchmarks/results.json", "JSON result file")
 	compare := flag.Bool("compare", false, "compare optimized linglang, Erlang, Elixir, and Go (requires elixir)")
 	frontend := flag.Bool("frontend", false, "measure bootstrap lexer/parser/resolver/checker/emitter phases")
+	var compilers compilerFlags
+	flag.Var(&compilers, "compiler", "self-hosted archive as label=path; repeat to compare archives (adds optimized and cells variants)")
+	sourceDir := flag.String("source-dir", "benchmarks", "application workload and reference source directory")
+	buildDir := flag.String("build-dir", "_build/benchmarks", "parent directory for retained application build artifacts")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flag.Args(), " "))
 	}
 	if *frontend {
-		if *compare || *workload != "all" {
-			return fmt.Errorf("-frontend cannot be combined with -compare or -workload")
+		if *compare || *workload != "all" || len(compilers) != 0 {
+			return fmt.Errorf("-frontend cannot be combined with -compare, -workload, or -compiler")
 		}
 		if *output == "_build/benchmarks/results.json" {
 			*output = "_build/benchmarks/frontend.json"
@@ -104,8 +114,8 @@ func run() error {
 	}
 	_, err := runBench(config{
 		samples: *samples, warmup: *warmup, workloads: selected,
-		sourceDir: "benchmarks", dir: "_build/benchmarks", output: *output,
-		compare: *compare,
+		sourceDir: *sourceDir, dir: *buildDir, output: *output,
+		compare: *compare, compilers: compilers,
 	}, os.Stdout)
 	return err
 }
@@ -131,15 +141,22 @@ func runBench(cfg config, log io.Writer) (*report, error) {
 		}
 		seen[workload] = true
 	}
-	selectedVariants := variants
+	if err := cfg.compilers.validate(); err != nil {
+		return nil, err
+	}
+	selectedVariants := append([]string(nil), variants...)
 	if cfg.compare {
-		selectedVariants = comparisonVariants
+		selectedVariants = append([]string(nil), comparisonVariants...)
 		for _, executable := range []string{"go", "elixir"} {
 			if _, err := exec.LookPath(executable); err != nil {
 				return nil, fmt.Errorf("-compare requires %s: %w", executable, err)
 			}
 		}
 	}
+	for _, archive := range cfg.compilers {
+		selectedVariants = append(selectedVariants, archive.Label+"_optimized", archive.Label+"_cells")
+	}
+
 	dir, err := filepath.Abs(cfg.dir)
 	if err != nil {
 		return nil, err
@@ -147,6 +164,16 @@ func runBench(cfg config, log io.Writer) (*report, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
+	// Retain each invocation separately so later runs cannot overwrite its evidence.
+	dir, err = os.MkdirTemp(dir, "applications-")
+	if err != nil {
+		return nil, err
+	}
+	archives, inputs, err := prepareApplicationInputs(cfg, dir)
+	if err != nil {
+		return nil, err
+	}
+	cfg.sourceDir = filepath.Join(dir, "inputs")
 	sources := compiler.RuntimeSources()
 	reference, err := os.ReadFile(filepath.Join(cfg.sourceDir, "bench_reference.erl"))
 	if err != nil {
@@ -170,6 +197,16 @@ func runBench(cfg config, log io.Writer) (*report, error) {
 			module := "bench_" + name + "_" + variant
 			sources[module+".erl"] = strings.Replace(program, "-module(linglang_program).", "-module("+module+").", 1)
 		}
+		for _, archive := range archives {
+			for _, mode := range []string{"optimized", "cells"} {
+				program, err := emitArchive(archive.Snapshot, path, mode == "cells")
+				if err != nil {
+					return nil, fmt.Errorf("%s/%s/%s: %w", name, archive.Label, mode, err)
+				}
+				module := "bench_" + name + "_" + archive.Label + "_" + mode
+				sources[module+".erl"] = strings.Replace(program, "-module(linglang_program).", "-module("+module+").", 1)
+			}
+		}
 	}
 	args := []string{"-o", dir}
 	var names []string
@@ -178,12 +215,14 @@ func runBench(cfg config, log io.Writer) (*report, error) {
 	}
 	sort.Strings(names)
 	fingerprint := sha256.New()
+	var generated []fileArtifact
 	for _, name := range names {
 		fmt.Fprintf(fingerprint, "%s\x00%s\x00", name, sources[name])
 		path := filepath.Join(dir, name)
 		if err := os.WriteFile(path, []byte(sources[name]), 0644); err != nil {
 			return nil, err
 		}
+		generated = append(generated, artifact(path, []byte(sources[name])))
 		args = append(args, path)
 	}
 	buildCtx, buildCancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -223,7 +262,11 @@ func runBench(cfg config, log io.Writer) (*report, error) {
 		fmt.Fprintln(log, "Measuring", workload)
 		// Allow every requested run its 30-second deadline, plus VM startup.
 		budget := time.Duration((cfg.samples+cfg.warmup)*len(selectedVariants))*30*time.Second + 10*time.Second
-		script := measurementScript(workload, cfg.samples, cfg.warmup, cfg.compare)
+		script := measurementScript(workload, cfg.samples, cfg.warmup, selectedVariants)
+		fmt.Fprintf(fingerprint, "%s\x00%s\x00", workload, script)
+		if err := os.WriteFile(filepath.Join(dir, workload+"-measurement.erl.txt"), []byte(script), 0644); err != nil {
+			return nil, err
+		}
 		var data []byte
 		if cfg.compare {
 			// Parse the shared Erlang measurement script; argument passing avoids
@@ -272,6 +315,7 @@ func runBench(cfg config, log io.Writer) (*report, error) {
 	}
 
 	report := &report{
+		SchemaVersion: 1, Compilers: archives, Inputs: inputs, Generated: generated, BuildDir: dir,
 		Timestamp: time.Now().UTC().Format(time.RFC3339), Platform: runtime.GOOS + "/" + runtime.GOARCH,
 		OTP: otp, VM: vm, Go: runtime.Version(), Schedulers: 1, SamplesPerVariant: cfg.samples,
 		NativeGo: nativeGo, Elixir: elixir, Variants: selectedVariants,
@@ -280,7 +324,13 @@ func runBench(cfg config, log io.Writer) (*report, error) {
 	if cfg.compare {
 		report.GoMaxProcs = 1
 	}
-	fmt.Fprintln(log, "\nWorkload     Variant       Median µs     P95 µs   Managed allocs   Peak cells   Reductions   Cell GCs   Go allocs")
+	variantWidth := 12
+	for _, variant := range selectedVariants {
+		if len(variant) > variantWidth {
+			variantWidth = len(variant)
+		}
+	}
+	fmt.Fprintf(log, "\n%-12s %-*s %10s %10s %16s %12s %12s %10s %10s\n", "Workload", variantWidth, "Variant", "Median µs", "P95 µs", "Managed allocs", "Peak cells", "Reductions", "Cell GCs", "Go allocs")
 	for _, workload := range cfg.workloads {
 		for _, variant := range selectedVariants {
 			var group []sample
@@ -297,10 +347,10 @@ func runBench(cfg config, log io.Writer) (*report, error) {
 			// Counters come from the run nearest the median elapsed time.
 			representative := group[len(group)/2]
 			if variant == "go" {
-				fmt.Fprintf(log, "%-12s %-12s %10.1f %10d %16s %12s %12s %10s %10d\n", workload, variant,
+				fmt.Fprintf(log, "%-12s %-*s %10.1f %10d %16s %12s %12s %10s %10d\n", workload, variantWidth, variant,
 					summary.MedianMicros, summary.P95Micros, "-", "-", "-", "-", *representative.GoAllocations)
 			} else {
-				fmt.Fprintf(log, "%-12s %-12s %10.1f %10d %16d %12d %12d %10d %10s\n", workload, variant,
+				fmt.Fprintf(log, "%-12s %-*s %10.1f %10d %16d %12d %12d %10d %10s\n", workload, variantWidth, variant,
 					summary.MedianMicros, summary.P95Micros, representative.Allocations,
 					representative.PeakCells, representative.Reductions, representative.Collections, "-")
 			}
@@ -340,10 +390,19 @@ func summarize(group []sample) summary {
 	return summary{group[0].Workload, group[0].Variant, median, group[(95*n+99)/100-1].Microseconds}
 }
 
-func measurementScript(workload string, samples, warmup int, compare bool) string {
-	entries := fmt.Sprintf("[{optimized, fun bench_%s_optimized:main/0}, {cells, fun bench_%s_cells:main/0}, {erlang, fun bench_reference:%s/0}]", workload, workload, workload)
-	if compare {
-		entries = fmt.Sprintf("[{optimized, fun bench_%s_optimized:main/0}, {erlang, fun bench_reference:%s/0}, {elixir, fun 'Elixir.BenchReference':%s/0}]", workload, workload, workload)
+func measurementScript(workload string, samples, warmup int, selected []string) string {
+	var entries []string
+	for _, variant := range selected {
+		switch variant {
+		case "go":
+			continue
+		case "erlang":
+			entries = append(entries, fmt.Sprintf("{erlang, fun bench_reference:%s/0}", workload))
+		case "elixir":
+			entries = append(entries, fmt.Sprintf("{elixir, fun 'Elixir.BenchReference':%s/0}", workload))
+		default:
+			entries = append(entries, fmt.Sprintf("{%s, fun bench_%s_%s:main/0}", variant, workload, variant))
+		}
 	}
 	return fmt.Sprintf(`
 try
@@ -376,10 +435,10 @@ try
  end,
  lists:foreach(fun(_) -> lists:foreach(fun(V) -> Measure(V, false) end, Variants) end, lists:seq(1, %[3]d)),
  lists:foreach(fun(Round) ->
-  {A, B} = lists:split(Round rem 3, Variants),
+  {A, B} = lists:split(Round rem length(Variants), Variants),
   lists:foreach(fun(V) -> Measure(V, true) end, B ++ A)
  end, lists:seq(1, %[2]d)),
  halt(0)
 catch Class:Reason:Stack -> io:format("~p:~p~n~p~n", [Class, Reason, Stack]), halt(1)
-end.`, workload, samples, warmup, entries)
+end.`, workload, samples, warmup, "["+strings.Join(entries, ", ")+"]")
 }

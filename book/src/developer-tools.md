@@ -66,9 +66,10 @@ repository compiler files currently use the seed style. Formatting copies with
 the Linglang tool is covered by the acceptance tests; wholesale restyling is not
 required to use the new commands.
 
-`lsp` and `release` still belong to the Go driver. The new
-commands remove Go from the terminal create/edit/format/check/test/build loop;
-editor language services and those other tools remain the next migration work.
+`lsp` still belongs to the Go driver. The terminal
+create/edit/format/check/test/build/release loop needs only OTP and the compiler
+archive; editor language services remain the next migration work. See
+[self-hosted release packaging](self-hosting.md#bundle-an-application-with-otp).
 
 ## Discover capabilities and verify dependencies
 

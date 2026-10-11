@@ -127,9 +127,63 @@ Optimized lowering uses native Erlang values where analysis can preserve behavio
 Address-taken or pointer-bearing values retain appropriate cells and roots.
 `--no-opt` is a semantic oracle for testing, not a separate language dialect.
 
-The seed currently performs more control-flow optimization. The bootstrap uses
-native values for eligible primitive locals, while many mutable control-flow
-bindings still use cells. Performance work must retain forced-GC correctness and
+The bootstrap's `emit_flow.lang` lowers primitive-only functions and eligible
+functions containing ordinary loops with mixed runtime values.
+Ordinary `for`, `if`, nested blocks, early returns, `break`, and `continue` become
+named Erlang tail-call edges. Resolver identities distinguish shadowed bindings;
+liveness passes only the locals each successor needs. Edges with more than 200
+live locals use one tuple argument to stay below BEAM's arity limit. Assignments
+retain left-to-right evaluation and writes, integer wrapping, and failure behavior.
+Primitive-only functions need no managed local cells, root scopes, or control-flow
+throws. Mixed-value functions use one managed scope for the whole call. Each block
+replaces its root snapshot with live pointer-bearing values and addressed-local
+cells before its safepoint. Ordinary locals, including loop counters, travel as
+native values; addressed locals retain stable cells. Suspended expression operands
+are kept in the current frame until the next block replaces the snapshot. No
+collection occurs while values pass along an edge or return to the caller. This
+keeps temporary roots bounded across iterations and preserves roots through nested
+collecting calls, blocking operations, early returns, and failures.
+Calls that may allocate retain safepoints, preserving collection opportunities
+for managed values rooted by callers. Known nonallocating primitive operations
+can omit those safepoints.
+
+Addressed for-loop initializer bindings, range loops, switches, and field/indirect
+assignment targets retain the existing bootstrap lowering. Mixed-value functions
+without ordinary loops still use the straight-line/leaf paths described below.
+Unreachable syntax is still validated. The seed supports broader optimization;
+this conservative boundary changes no source-language behavior. In the fallback,
+eligible primitive locals still use native values, and for-loop lowering reuses initializer
+cells whose addresses are never taken. The existing resolver-identity analysis
+checks the entire function, including unreachable branches and interior-address
+operands. Only addressed initializer bindings are cloned before the post
+statement; mixed initializers retain the correct identity for each binding.
+The reference cell lowering still clones every initializer cell. Reused cells
+retain their existing typed roots and collection safepoints.
+Unchanged pointer parameters also use native values in the fallback. Unless the
+function meets the leaf proof below, entry code roots each pointer in its managed
+scope before body safepoints; return and failure unwind that scope without collecting during the
+handoff to the caller. This removes the parameter's storage cell, not the pointee
+or its identity. Any parameter rebinding or address-taking in the whole function,
+including unreachable code, retains a cell. The address scan remains conservative
+for interior-address expressions. Pointer locals and other nonprimitive bindings
+in that fallback retain their existing representation. The seed already supports broader native
+bindings; differential tests keep the two implementations aligned.
+
+`emit_leaves.lang` removes managed scopes, temporary keeps, and safepoints from
+remaining helpers only when the entire lowering cannot allocate or collect a
+managed cell. Every named parameter/local must already have a native binding;
+runtime expression values are limited to primitives, pointers, nil, and void.
+Loops, range, switches, address-taking, user calls (including recursion), I/O,
+process operations, and unknown calls retain the rooted path. The small allowed
+call set is resolved by binding identity: primitive conversions, assertion/panic,
+string length, byte access, slicing, trimming, integer formatting, and character
+classification. Unreachable code participates in the proof. Pointer-field and
+indirect writes, parallel assignments, conditionals, and early returns keep their
+existing evaluation and failure rules. BEAM term allocation/GC remains possible,
+but no managed collection can reclaim a pointee during the helper. Calling code
+retains its normal root protocol and safepoints. This pass does not infer safety
+transitively through other user functions. The seed has its own broader leaf proof.
+Performance work must retain forced-GC correctness and
 agreement between both compiler paths.
 
 ## Shared runtime
@@ -200,3 +254,9 @@ safepoint. Optimized locals retain their native representation where possible;
 addressed locals use managed cells. For-loop initializer bindings each receive
 new iteration storage before the post statement. Differential tests exercise
 these rules with forced collection and the reference lowering.
+
+The self-hosted `release` driver delegates generated Erlang compilation and ERTS
+bundling to `releaseProgram`. This runs OTP compiler/systools APIs in its VM and
+shares the archive layout and launcher with the seed. Command parsing, linking,
+checking, and source-input selection remain in Linglang (`release.lang` and
+`main.lang`). Atomic publication protects both root and imported source aliases.

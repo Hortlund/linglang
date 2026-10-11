@@ -125,6 +125,66 @@ defmodule BenchReference do
     round_trips(pid, i64(i + 1), i64(total + value))
   end
 
+  def prime_jobs do
+    parent = self()
+    workers = for id <- 0..3 do
+      {pid, ref} = spawn_monitor(fn -> prime_worker(parent) end)
+      send(pid, {:job, id, (rem(id, 4) + 1) * 1_000})
+      {pid, ref}
+    end
+    11_608 = prime_results(0, 4, %{}, 0)
+    Enum.each(workers, fn {pid, ref} ->
+      receive do
+        {:DOWN, ^ref, :process, ^pid, :normal} -> :ok
+      after
+        5_000 -> error(:worker_timeout)
+      end
+    end)
+    :ok
+  end
+
+  defp prime_worker(parent) do
+    receive do
+      {:job, -1, _} -> :ok
+      {:job, id, limit} ->
+        send(parent, {:prime_reply, self(), id, count_primes(2, limit, 0)})
+        prime_worker(parent)
+    after
+      5_000 -> error(:message_timeout)
+    end
+  end
+
+  defp count_primes(n, limit, total) when n > limit, do: total
+  defp count_primes(n, limit, total) do
+    add = if prime(n, 2), do: 1, else: 0
+    count_primes(n + 1, limit, total + add)
+  end
+  defp prime(n, d) when d * d > n, do: true
+  defp prime(n, d), do: rem(n, d) != 0 and prime(n, d + 1)
+
+  defp prime_results(32, _, seen, total) do
+    32 = map_size(seen)
+    total
+  end
+  defp prime_results(completed, next, seen, total) do
+    receive do
+      {:prime_reply, pid, id, count} ->
+        true = id >= 0 and id < 32
+        false = Map.has_key?(seen, id)
+        ^count = elem({168, 303, 430, 550}, rem(id, 4))
+        more = if next < 32 do
+          send(pid, {:job, next, (rem(next, 4) + 1) * 1_000})
+          next + 1
+        else
+          send(pid, {:job, -1, 0})
+          next
+        end
+        prime_results(completed + 1, more, Map.put(seen, id, true), total + count)
+    after
+      5_000 -> error(:message_timeout)
+    end
+  end
+
   defp error(reason), do: :erlang.error(reason)
 
   defp i64(value) do

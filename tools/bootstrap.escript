@@ -70,6 +70,7 @@ bootstrap(#{root := Root, seed := SeedPath, output := OutputPath, timeout := Tim
                 Core = lists:sort(filelib:wildcard(filename:join(Source, "*.lang"))),
                 Paths = [P || P <- Core, filename:basename(P) =/= "developer_tools.lang",
                              filename:basename(P) =/= "dependencies.lang",
+                             filename:basename(P) =/= "release.lang",
                              not lists:suffix("_test.lang", P)] ++
                         [filename:join(Root, "bootstrap/seed-upgrade/developer_tools.lang")],
                 Upgraded = run(Original, ["emit" | Paths], Work, "upgrade-seed", Timeout),

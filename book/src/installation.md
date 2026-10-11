@@ -56,8 +56,9 @@ imports remain relative to your source files; there is no implicit global
 standard-library import path. Copy needed packages from the bundled `stdlib`
 into your project's vendor directory, then use relative imports and `deps`.
 
-The archive does not include the optional SQLite helper, the Go seed's `lsp` or
-`release` commands, or OTP itself. See [SQLite setup](io.md) and
+The archive does not include the optional SQLite helper, the Go seed's `lsp`
+command, or OTP itself. The self-hosted `release` command can separately bundle
+an application with the current host's OTP runtime. See [SQLite setup](io.md) and
 [application shipping](tooling.md). The downloaded compiler's `build` creates an
 OTP-dependent executable; its format differs from the Go seed's `build`
 directory output. VS Code's existing extension still uses its Go-based server.

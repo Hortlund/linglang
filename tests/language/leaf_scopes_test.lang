@@ -1,0 +1,53 @@
+package main
+
+type LeafNode struct {
+	value int
+	next  *LeafNode
+}
+
+func leafSwap(p *int, q *int) *int { *p, *q = *q, *p; (*p)++; return q }
+func leafAlias(p *int, q *int)     { *p, *q = *p+1, *q+2 }
+func leafChoose(p *int) int {
+	if n := *p; n > 0 {
+		x := n + 1
+		return x
+	}
+	{
+		x := 2
+		*p += x
+	}
+	return *p
+}
+func leafDrop(owner **LeafNode, p *LeafNode) *LeafNode {
+	*owner = nil
+	p.value++
+	p.next = p
+	return p
+}
+func leafOverflow(p *int) { (*p)++; *p >>= 64; *p <<= 64 }
+func leafChurn() {
+	for i := 0; i < 40; i++ {
+		p := &LeafNode{value: i}
+		assert(p.value == i)
+	}
+}
+func leafAllocating(p *LeafNode) int { leafChurn(); return p.value }
+func TestLeafScopes() {
+	a, b := 41, 9
+	assert(leafSwap(&a, &b) == &b && a == 10 && b == 41)
+	leafAlias(&a, &a)
+	assert(a == 12)
+	assert(leafChoose(&a) == 13)
+	a = -3
+	assert(leafChoose(&a) == -1 && a == -1)
+	p := &LeafNode{value: 7}
+	owner := p
+	q := leafDrop(&owner, p)
+	leafChurn()
+	assert(owner == nil && q == p && p.next == p && p.value == 8)
+	leafAlias(&p.value, &q.value)
+	assert(p.value == 10 && leafAllocating(q) == 10)
+	a = 9223372036854775807
+	leafOverflow(&a)
+	assert(a == 0)
+}

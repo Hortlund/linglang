@@ -7,3 +7,7 @@ func bootstrapFormat(values List[string]) { panic("seed upgrade compiler: fmt un
 func bootstrapInit(values List[string])   { panic("seed upgrade compiler: init unavailable") }
 
 func bootstrapDeps(values List[string]) { panic("seed upgrade compiler: deps unavailable") }
+
+func bootstrapRelease(source string, files List[SyntaxNode], options BootstrapOptions) {
+	panic("seed upgrade compiler: release unavailable")
+}

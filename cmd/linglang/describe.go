@@ -85,7 +85,7 @@ func describeCommand(args []string, stdout, stderr io.Writer) error {
 			{"http", "limited", "Source library stdlib/http: bounded single-request HTTP/1.1 subset, no request bodies or TLS."},
 			{"remote-packages", "unavailable", "No fetching, registry, version solver, or package install hooks."},
 			{"user-generics", "unavailable", "Generic native operations exist; user-defined generic declarations are unsupported."},
-			{"self-hosted-tooling", "limited", "The separate bootstrap driver supports check/emit/build/run/test/fmt/init/describe/deps; lsp and release remain Go CLI features; both drivers support JSON checks/tests and check --tests."},
+			{"self-hosted-tooling", "limited", "The separate bootstrap driver supports check/emit/build/release/run/test/fmt/init/describe/deps; lsp remains a Go CLI feature; both drivers support JSON checks/tests and check --tests."},
 		},
 		Notes: []string{
 			"This describes compiled capabilities, not installed runtime dependencies or a compatibility guarantee.",

@@ -6,6 +6,8 @@ func nativeParameterNames(name string) string {
 	switch name {
 	case "assert":
 		return "condition"
+	case "releaseProgram":
+		return "source path inputs license stress stats"
 	case "buildProgram":
 		return "source path inputs stress stats"
 	case "byteAt":

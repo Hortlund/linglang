@@ -39,16 +39,26 @@ func emitStraightBody(body SyntaxNode) bool {
 
 func emitAnalyzeLocals(e *Emitter, function SyntaxNode) {
 	e.valueLocals = nil
+	e.addressedLocals = nil
 	e.values = nil
 	e.straight = !e.noOpt && emitStraightBody(childAt(function, 3))
 	if e.noOpt {
 		return
 	}
 	var candidates List[string]
+	var pointerParameters Map[string, bool]
 	for _, field := range childAt(function, 1).children {
 		for _, name := range childAt(field, 0).children {
-			if name.text != "_" && emitPrimitive(emitDefinition(e, name).typeID) {
-				candidates = prepend(sourceIdentity(name.at), candidates)
+			if name.text != "_" {
+				id := emitDefinition(e, name).typeID
+				key := sourceIdentity(name.at)
+				pointer := get(e.checked.types, id).value.kind == "pointer"
+				if emitPrimitive(id) || pointer {
+					candidates = prepend(key, candidates)
+				}
+				if pointer {
+					pointerParameters = put(pointerParameters, key, true)
+				}
 			}
 		}
 	}
@@ -67,7 +77,7 @@ func emitAnalyzeLocals(e *Emitter, function SyntaxNode) {
 		}
 		if node.kind == "UnaryExpr" && node.text == "&" {
 			// Conservative over the entire operand: never leave an addressable
-			// primitive in native storage, even on an unreachable branch.
+			// binding in native storage, even on an unreachable branch.
 			operands := node.children
 			for head(operands).ok {
 				operand := head(operands).value
@@ -100,10 +110,14 @@ func emitAnalyzeLocals(e *Emitter, function SyntaxNode) {
 		}
 	}
 	for _, key := range candidates {
-		if !get(addressed, key).ok && (e.straight || !get(changed, key).ok) {
+		// Pointer parameters stay native only when their binding never changes.
+		// Pointee writes do not rebind the parameter. Rebinding retains a cell
+		// even in straight-line code, keeping root updates on the reference path.
+		if !get(addressed, key).ok && (!get(changed, key).ok || (e.straight && !get(pointerParameters, key).ok)) {
 			e.valueLocals = put(e.valueLocals, key, true)
 		}
 	}
+	e.addressedLocals = addressed
 }
 
 func emitAssignValue(e *Emitter, key string, value string) string {
@@ -115,7 +129,9 @@ func emitAssignValue(e *Emitter, key string, value string) string {
 func emitDeclareLocal(e *Emitter, node SyntaxNode, value string) string {
 	key := sourceIdentity(node.at)
 	if get(e.valueLocals, key).value {
-		return emitAssignValue(e, key, value)
+		// The enclosing function scope owns native pointer parameter roots.
+		// Install them before any body safepoint; scope exit never collects.
+		return emitAssignValue(e, key, emitKeep(e, emitDefinition(e, node).typeID, value))
 	}
 	return emitCell(e, node, true) + " = " + emitNew(e, emitDefinition(e, node).typeID, value)
 }

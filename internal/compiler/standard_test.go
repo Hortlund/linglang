@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -129,5 +130,36 @@ func TestBootstrapBuildFailurePreservesOutput(t *testing.T) {
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("temporary build files leaked: %v %v", entries, err)
+	}
+}
+
+func TestReleaseBridgeFailurePreservesOutput(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("runtime releases require Linux/macOS")
+	}
+	for _, noOpt := range []bool{false, true} {
+		t.Run(fmt.Sprint(noOpt), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "archive.tar.gz")
+			if err := os.WriteFile(path, []byte("old archive"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			source := fmt.Sprintf(`func main(){
+    failed:=releaseProgram("not Erlang",%s,nil,"license",true,true)
+    assert(!failed.ok)
+    println(readFile(%s).value)
+    wrong:=releaseProgram("-module(wrong).\n-export([main/0]).\nmain()->ok.",%s,nil,"license",false,false)
+    assert(!wrong.ok)
+    println(wrong.reason)
+   }`, strconv.Quote(path), strconv.Quote(path), strconv.Quote(path))
+			got, err := executeScriptWithOptions(t, source, "linglang_rt:set_gc_stress(true), linglang_program:main(), halt().", Options{DisableOptimizations: noOpt})
+			if err != nil || got != "old archive\nexpected module linglang_program, got wrong\n" {
+				t.Fatalf("release bridge: %v %q", err, got)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("release failure leaked files: %v %v", entries, err)
+			}
+		})
 	}
 }

@@ -68,11 +68,16 @@ appear when compiling.
 | `linglang build -o _build .` | BEAM module directory | Compatible OTP and a launcher |
 | `linglang pack -o app.escript .` | Executable archive | Compatible OTP |
 | `linglang-bootstrap build -o app.escript .` | Executable archive | Compatible OTP |
-| `linglang release -o dist/app.tar.gz .` | Program plus ERTS/OTP | Matching OS/CPU and compatible system libraries |
+| Either driver: `release -o dist/app.tar.gz .` | Program plus ERTS/OTP | Matching OS/CPU and compatible system libraries |
 
 `pack` and bootstrap `build` embed the Linglang runtime. They do not include
 input data or OTP itself. Arguments passed to the executable are visible through
 `args()`. Relative file paths are resolved from the caller's working directory.
+
+`linglang-bootstrap release` needs only OTP for packaging (no Go or `erlc`).
+Its default output is `program.tar.gz`; use `-o` for an explicit name. Both
+drivers preserve existing archives on handled failures and protect root/imported
+source aliases from being overwritten.
 
 `release` supports Linux and macOS builds for the build machine's architecture.
 It is not a cross-compilation facility. Unpack the archive and run `bin/run`.

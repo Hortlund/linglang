@@ -15,7 +15,7 @@ type BootstrapOptions struct {
 }
 
 func bootstrapUsage() string {
-	return "usage: linglang-bootstrap <check|emit|build|run|test|fmt|init|describe|deps> [options] <source.lang|directory>...\n  describe: [--json]\n  deps: [--check] [--json] [file|directory]\n  fmt: [--check] [file|directory ...]\n  init: [directory]\n  check/test: --json (structured output)\n  check: --tests (validate test/library roots)\n  compiler: --no-opt (original cell lowering)\n  build: -o <executable> (default: program.escript)\n  build/run/test: --gc-stress --gc-stats\n  test: --timeout <positive milliseconds or Ns/Nms> (default: 30s)\n  run: -- <program arguments>\n  source paths without a command retain legacy emit behavior"
+	return "usage: linglang-bootstrap <check|emit|build|release|run|test|fmt|init|describe|deps> [options] <source.lang|directory>...\n  describe: [--json]\n  deps: [--check] [--json] [file|directory]\n  fmt: [--check] [file|directory ...]\n  init: [directory]\n  check/test: --json (structured output)\n  check: --tests (validate test/library roots)\n  compiler: --no-opt (original cell lowering)\n  build: -o <executable> (default: program.escript)\n  release: -o <archive.tar.gz> (default: program.tar.gz)\n  build/release/run/test: --gc-stress --gc-stats\n  test: --timeout <positive milliseconds or Ns/Nms> (default: 30s)\n  run: -- <program arguments>\n  source paths without a command retain legacy emit behavior"
 }
 
 func bootstrapOptions(values List[string]) BootstrapOptions {
@@ -25,8 +25,11 @@ func bootstrapOptions(values List[string]) BootstrapOptions {
 		options.help = true
 		return options
 	}
-	if first == "check" || first == "emit" || first == "build" || first == "run" || first == "test" {
+	if first == "check" || first == "emit" || first == "build" || first == "release" || first == "run" || first == "test" {
 		options.command = first
+		if first == "release" {
+			options.output = "program.tar.gz"
+		}
 		values = tail(values)
 	}
 	for head(values).ok {
@@ -58,14 +61,14 @@ func bootstrapOptions(values List[string]) BootstrapOptions {
 		} else if value == "--no-opt" {
 			options.noOpt = true
 		} else if value == "-o" {
-			if options.command != "build" || !head(values).ok || head(values).value == "" {
-				panic("-o requires build and an output path")
+			if (options.command != "build" && options.command != "release") || !head(values).ok || head(values).value == "" {
+				panic("-o requires build or release and an output path")
 			}
 			options.output = head(values).value
 			values = tail(values)
 		} else if value == "--gc-stress" || value == "--gc-stats" {
-			if options.command != "build" && options.command != "run" && options.command != "test" {
-				panic("GC options require build, run, or test")
+			if options.command != "build" && options.command != "release" && options.command != "run" && options.command != "test" {
+				panic("GC options require build, release, run, or test")
 			}
 			if value == "--gc-stress" {
 				options.stress = true
@@ -160,6 +163,8 @@ func main() {
 	}
 	if options.command == "emit" {
 		print(result.module)
+	} else if options.command == "release" {
+		bootstrapRelease(result.module, files, options)
 	} else if options.command == "build" {
 		var inputs List[string]
 		for _, file := range files {

@@ -73,6 +73,7 @@ func nativeFunctions(c *Checker, scope *TypeScope) {
 	nativeFunction(c, scope, "runTestProgram", List[int]{tString, stringsType, tBool, tBool, tInt}, ioType)
 	nativeFunction(c, scope, "moduleFiles", List[int]{tString}, typedName(scope, "FilesResult").value.typeID)
 	nativeFunction(c, scope, "sourceFiles", List[int]{stringsType}, typedName(scope, "FilesResult").value.typeID)
+	nativeFunction(c, scope, "releaseProgram", List[int]{tString, tString, stringsType, tString, tBool, tBool}, ioType)
 	nativeFunction(c, scope, "buildProgram", List[int]{tString, tString, stringsType, tBool, tBool}, ioType)
 	nativeFunction(c, scope, "runProgram", List[int]{tString, stringsType, tBool, tBool}, ioType)
 	nativeFunction(c, scope, "split", List[int]{tString, tString}, compoundType(c, "list", 0, tString))

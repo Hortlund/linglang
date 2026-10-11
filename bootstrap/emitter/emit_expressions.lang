@@ -352,6 +352,8 @@ func emitCall(e *Emitter, node SyntaxNode) string {
 			target = "linglang_rt:module_files"
 		case "sourceFiles":
 			target = "linglang_rt:source_files"
+		case "releaseProgram":
+			target = "linglang_rt:release_program"
 		case "buildProgram":
 			target = "linglang_rt:build_program"
 		case "runProgram":

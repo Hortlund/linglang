@@ -189,9 +189,12 @@ errors and may produce no events. The per-line schema is
 | Imports and scope | `internal/compiler/modules.go` | `bootstrap/emitter/modules.lang`, `bootstrap/resolver/` |
 | Type rules and native API | `internal/compiler/compiler.go`, `processes.go`, `standard.go`, `maps.go` | `bootstrap/checker/`, especially `native.lang` |
 | Lowering and evaluation | `internal/compiler/locals.go`, `lists.go`, `maps.go`, `switches.go`, `processes.go`, `servers.go` | `bootstrap/emitter/emit_*.lang`, `emitter.lang` |
+| Native control flow and live roots | `internal/compiler/locals.go` | `bootstrap/emitter/emit_flow.lang`; fallback in `emit_locals.lang`, `emit_statements.lang` |
+| Noncollecting leaf scopes | `internal/compiler/locals.go` | `bootstrap/emitter/emit_leaves.lang`, `emit_roots.lang`, `emit_statements.lang` |
 | Runtime ownership and OTP | `internal/compiler/runtime.erl`, `supervision.erl`, `server.erl`, `io.erl` | Shared embedded runtime |
 | Formatting and project creation | `cmd/linglang/format.go`, `init.go`, `starter/` | `bootstrap/emitter/formatting.lang`, `developer_tools.lang`, `project_templates.lang` |
 | Discovery and dependency locks | `cmd/linglang/describe.go`, `deps.go`, `deps_decode.go` | `bootstrap/emitter/discovery.lang`, `native_catalog.lang`, `dependencies.lang`, `json.lang` |
+| Runtime release packaging | `cmd/linglang/release.go`; shared `release_package` in `internal/compiler/runtime.erl` | `bootstrap/emitter/release.lang`, `main.lang`; typed OTP `releaseProgram` bridge |
 | CLI and tests | `cmd/linglang/`; structured check/discovery in `check.go`, `describe.go` | `bootstrap/emitter/main.lang`, `testing.lang` |
 | Diagnostic transport | `internal/compiler/diagnostics.go`; LSP adapter in `internal/lsp/` | `bootstrap/emitter/tooling.lang` result records and rendering |
 | Contract and examples | `book/src/specification.md`, topic chapters, `book/examples/` | Shared documentation and differential fixtures |

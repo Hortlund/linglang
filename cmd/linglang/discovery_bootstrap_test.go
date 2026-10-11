@@ -69,7 +69,7 @@ func testBootstrapDiscovery(t *testing.T, cli string, env []string) {
 		commands = append(commands, command.Name)
 	}
 	sort.Strings(commands)
-	if strings.Join(commands, ",") != "build,check,deps,describe,emit,fmt,init,run,test" {
+	if strings.Join(commands, ",") != "build,check,deps,describe,emit,fmt,init,release,run,test" {
 		t.Fatal(commands)
 	}
 	expected, err := compiler.NativeAPI()

@@ -1,0 +1,412 @@
+package main
+
+// Native edges carry live values and stable cells for addressed bindings.
+// Mixed-value loops replace a single managed frame before block safepoints.
+type NativeBlock struct {
+	id        int
+	statement SyntaxNode
+	condition SyntaxNode
+	result    List[SyntaxNode]
+	returns   bool
+	next      int
+	other     int
+	uses      Map[string, bool]
+	defs      Map[string, bool]
+	live      Map[string, bool]
+}
+
+type NativeFlow struct {
+	name       string
+	keys       List[string]
+	known      Map[string, bool]
+	types      Map[string, int]
+	boxed      Map[string, bool]
+	mixed      bool
+	loop       bool
+	blocks     Map[int, *NativeBlock]
+	count      int
+	safepoints bool
+}
+
+func nativeAddLocal(g *NativeFlow, key string, id int) {
+	if !get(g.known, key).ok {
+		g.known = put(g.known, key, true)
+		g.types = put(g.types, key, id)
+		g.keys = append(g.keys, key)
+	}
+}
+
+// This is an optimization boundary, not a new language restriction. Inspect
+// unreachable syntax too; the fallback must still diagnose unsupported forms.
+func nativeEligible(e *Emitter, function SyntaxNode, g *NativeFlow) bool {
+	if e.noOpt {
+		return false
+	}
+	signature := get(e.checked.types, emitDefinition(e, childAt(function, 0)).typeID).value
+	if signature.result != tVoid && !emitPrimitive(signature.result) {
+		g.mixed = true
+	}
+	for _, id := range signature.params {
+		if !emitPrimitive(id) {
+			g.mixed = true
+		}
+	}
+	for _, field := range childAt(function, 1).children {
+		for _, name := range childAt(field, 0).children {
+			if name.text != "_" {
+				nativeAddLocal(g, sourceIdentity(name.at), emitDefinition(e, name).typeID)
+			}
+		}
+	}
+	pending := List[SyntaxNode]{childAt(function, 3)}
+	for head(pending).ok {
+		node := head(pending).value
+		pending = tail(pending)
+		switch node.kind {
+		case "ForStmt":
+			g.loop = true
+			// Addressed initializers need a fresh cell per iteration.
+			initial := List[SyntaxNode]{childAt(node, 0)}
+			for head(initial).ok {
+				part := head(initial).value
+				initial = tail(initial)
+				if get(e.addressedLocals, sourceIdentity(part.at)).ok && get(e.checked.definitions, sourceIdentity(part.at)).ok {
+					return false
+				}
+				for _, child := range part.children {
+					initial = prepend(child, initial)
+				}
+			}
+		case "RangeStmt", "SwitchStmt":
+			return false
+		case "DeclStmt":
+			if childAt(node, 0).text != "var" && childAt(node, 0).text != "const" {
+				return false
+			}
+		case "AssignStmt":
+			for _, target := range childAt(node, 0).children {
+				if target.kind != "Ident" {
+					return false
+				}
+			}
+		case "IncDecStmt":
+			if childAt(node, 0).kind != "Ident" {
+				return false
+			}
+		case "UnaryExpr":
+			if node.text == "&" {
+				g.mixed = true
+			}
+		case "CallExpr":
+			callee := emitValue(e, emitCallee(childAt(node, 0)))
+			// Only known nonallocating primitives may omit managed safepoints.
+			if callee.kind != "type" {
+				safe := false
+				if callee.kind == "native" || callee.kind == "intrinsic" {
+					switch callee.name {
+					case "assert", "len", "byteAt", "slice", "trim", "formatInt", "isLetter", "isDigit", "print", "println":
+						safe = true
+					}
+				}
+				if !safe {
+					g.safepoints = true
+				}
+			}
+		}
+		value := get(e.checked.expressions, expressionIdentity(node))
+		if value.ok && value.value.kind == "value" && value.value.typeID != tVoid && !emitPrimitive(defaultType(value.value.typeID)) {
+			g.mixed = true
+		}
+		if node.kind == "Ident" {
+			definition := get(e.checked.definitions, sourceIdentity(node.at))
+			if definition.ok && definition.value.kind == "var" {
+				if !emitPrimitive(definition.value.typeID) {
+					g.mixed = true
+				}
+				if node.text != "_" {
+					nativeAddLocal(g, sourceIdentity(node.at), definition.value.typeID)
+				}
+			}
+		}
+		for _, child := range node.children {
+			pending = prepend(child, pending)
+		}
+	}
+	// Keep the separate leaf proof and straight-line fallback unchanged.
+	if g.mixed && !g.loop {
+		return false
+	}
+	for _, key := range g.keys {
+		if get(e.addressedLocals, key).ok {
+			g.boxed = put(g.boxed, key, true)
+		}
+	}
+	g.safepoints = g.safepoints || g.mixed
+	return e.reason == ""
+}
+
+func nativeBlock(g *NativeFlow) *NativeBlock {
+	g.count++
+	b := &NativeBlock{id: g.count}
+	g.blocks = put(g.blocks, b.id, b)
+	return b
+}
+
+func nativeSequence(e *Emitter, g *NativeFlow, nodes List[SyntaxNode], next int, stop int, again int) int {
+	var reverse List[SyntaxNode]
+	for _, node := range nodes {
+		reverse = prepend(node, reverse)
+	}
+	for _, node := range reverse {
+		next = nativeStatement(e, g, node, next, stop, again)
+	}
+	return next
+}
+
+func nativeStatement(e *Emitter, g *NativeFlow, node SyntaxNode, next int, stop int, again int) int {
+	switch node.kind {
+	case "nil", "EmptyStmt":
+		return next
+	case "BlockStmt":
+		return nativeSequence(e, g, node.children, next, stop, again)
+	case "IfStmt":
+		b := nativeBlock(g)
+		b.condition = childAt(node, 1)
+		b.next = nativeStatement(e, g, childAt(node, 2), next, stop, again)
+		b.other = nativeStatement(e, g, childAt(node, 3), next, stop, again)
+		return nativeStatement(e, g, childAt(node, 0), b.id, stop, again)
+	case "ForStmt":
+		b := nativeBlock(g)
+		b.condition = childAt(node, 1)
+		b.other = next
+		post := nativeStatement(e, g, childAt(node, 2), b.id, 0, 0)
+		b.next = nativeStatement(e, g, childAt(node, 3), post, next, post)
+		if b.condition.kind == "nil" {
+			b.other = 0
+		}
+		return nativeStatement(e, g, childAt(node, 0), b.id, stop, again)
+	case "BranchStmt":
+		if node.text == "break" && stop != 0 {
+			return stop
+		}
+		if node.text == "continue" && again != 0 {
+			return again
+		}
+		emitFail(e, node.at, "break requires a loop or switch; continue requires a loop")
+		return next
+	case "ReturnStmt":
+		b := nativeBlock(g)
+		b.returns = true
+		b.result = node.children
+		return b.id
+	}
+	b := nativeBlock(g)
+	b.statement = node
+	b.next = next
+	return b.id
+}
+
+func nativeUse(e *Emitter, g *NativeFlow, b *NativeBlock, node SyntaxNode) {
+	pending := List[SyntaxNode]{node}
+	for head(pending).ok {
+		current := head(pending).value
+		pending = tail(pending)
+		key := emitLocalKey(e, current)
+		if get(g.known, key).ok && !get(b.defs, key).ok {
+			b.uses = put(b.uses, key, true)
+		}
+		for _, child := range current.children {
+			pending = prepend(child, pending)
+		}
+	}
+}
+
+func nativeLiveness(e *Emitter, g *NativeFlow) {
+	for id := 1; id <= g.count; id++ {
+		b := get(g.blocks, id).value
+		node := b.statement
+		switch node.kind {
+		case "DeclStmt":
+			declaration := childAt(node, 0)
+			if declaration.text == "var" {
+				for _, spec := range declaration.children {
+					nativeUse(e, g, b, childAt(spec, 2))
+					for _, name := range childAt(spec, 0).children {
+						b.defs = put(b.defs, sourceIdentity(name.at), true)
+					}
+				}
+			}
+		case "AssignStmt":
+			nativeUse(e, g, b, childAt(node, 1))
+			if node.text != "=" && node.text != ":=" {
+				nativeUse(e, g, b, childAt(node, 0))
+			}
+			for _, target := range childAt(node, 0).children {
+				key := emitLocalKey(e, target)
+				if get(g.boxed, key).ok && !get(e.checked.definitions, sourceIdentity(target.at)).ok {
+					nativeUse(e, g, b, target)
+				} else {
+					b.defs = put(b.defs, key, true)
+				}
+			}
+		case "IncDecStmt":
+			nativeUse(e, g, b, childAt(node, 0))
+			key := emitLocalKey(e, childAt(node, 0))
+			if !get(g.boxed, key).ok {
+				b.defs = put(b.defs, key, true)
+			}
+		case "ExprStmt":
+			nativeUse(e, g, b, childAt(node, 0))
+		}
+		nativeUse(e, g, b, b.condition)
+		for _, value := range b.result {
+			nativeUse(e, g, b, value)
+		}
+		b.live = b.uses
+	}
+	changed := true
+	for changed {
+		changed = false
+		for id := 1; id <= g.count; id++ {
+			b := get(g.blocks, id).value
+			for _, successor := range (List[int]{b.next, b.other}) {
+				if successor != 0 {
+					next := get(g.blocks, successor).value
+					for _, key := range g.keys {
+						if get(next.live, key).ok && !get(b.defs, key).ok && !get(b.live, key).ok {
+							b.live = put(b.live, key, true)
+							changed = true
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func nativeArgs(values List[string]) string {
+	args := join(values, ", ")
+	if len(values) > 200 {
+		return "{" + args + "}"
+	}
+	return args
+}
+
+func nativeName(g *NativeFlow, id int) string { return g.name + "_flow_" + formatInt(id) }
+
+func nativeEdge(e *Emitter, g *NativeFlow, id int) string {
+	var args List[string]
+	b := get(g.blocks, id).value
+	for _, key := range g.keys {
+		if get(b.live, key).ok {
+			value := get(e.values, key)
+			if get(g.boxed, key).ok {
+				value = get(e.cells, key)
+			}
+			if !value.ok {
+				emitFail(e, b.statement.at, "native flow binding has no incoming value")
+			}
+			args = append(args, value.value)
+		}
+	}
+	return nativeName(g, id) + "(" + nativeArgs(args) + ")"
+}
+
+func nativeEmitBlock(e *Emitter, g *NativeFlow, b *NativeBlock) string {
+	e.values = nil
+	e.cells = nil
+	var roots List[string]
+	var params List[string]
+	for _, key := range g.keys {
+		if get(b.live, key).ok {
+			value := emitFresh(e)
+			if get(g.boxed, key).ok {
+				e.cells = put(e.cells, key, value)
+			} else {
+				e.values = put(e.values, key, value)
+			}
+			if get(g.boxed, key).ok || emitReferences(e, get(g.types, key).value) {
+				roots = append(roots, value)
+			}
+			params = append(params, value)
+		}
+	}
+	var code List[string]
+	if g.mixed {
+		code = append(code, "linglang_rt:roots(["+join(roots, ", ")+"])")
+	}
+	if g.safepoints {
+		code = append(code, "linglang_rt:safepoint()")
+	}
+	if b.statement.kind != "" {
+		code = append(code, emitStatement(e, b.statement))
+	}
+	if b.returns {
+		code = append(code, emitResults(e, b.result))
+	} else if b.condition.kind != "" && b.condition.kind != "nil" {
+		condition := emitExpression(e, b.condition, false)
+		code = append(code, "case "+condition+" of true -> "+nativeEdge(e, g, b.next)+"; false -> "+nativeEdge(e, g, b.other)+" end")
+	} else {
+		code = append(code, nativeEdge(e, g, b.next))
+	}
+	return nativeName(g, b.id) + "(" + nativeArgs(params) + ") ->\n    " + join(code, ",\n    ") + "."
+}
+
+func emitNativeFunction(e *Emitter, function SyntaxNode, g *NativeFlow) string {
+	signature := get(e.checked.types, emitDefinition(e, childAt(function, 0)).typeID).value
+	for _, id := range signature.params {
+		emitRequireType(e, id, childAt(function, 0).at)
+	}
+	e.nativeFlow = true
+	e.valueLocals = g.known
+	for _, key := range g.keys {
+		if get(g.boxed, key).ok {
+			e.valueLocals = remove(e.valueLocals, key)
+		}
+	}
+	e.values = nil
+	e.cells = nil
+	end := nativeBlock(g)
+	end.returns = true
+	entry := nativeSequence(e, g, childAt(function, 3).children, end.id, 0, 0)
+	nativeLiveness(e, g)
+	var args List[string]
+	var setup List[string]
+	for _, field := range childAt(function, 1).children {
+		if !head(childAt(field, 0).children).ok {
+			args = append(args, emitFresh(e))
+		}
+		for _, parameter := range childAt(field, 0).children {
+			value := emitFresh(e)
+			args = append(args, value)
+			if parameter.text != "_" {
+				key := sourceIdentity(parameter.at)
+				id := emitDefinition(e, parameter).typeID
+				if get(g.boxed, key).ok {
+					setup = append(setup, emitCell(e, parameter, true)+" = "+emitNew(e, id, value))
+				} else {
+					e.values = put(e.values, key, value)
+				}
+			}
+		}
+	}
+	var functions List[string]
+	setup = append(setup, nativeEdge(e, g, entry))
+	start := join(setup, ", ")
+	if g.mixed {
+		start = emitScope(start)
+	}
+	functions = append(functions, g.name+"("+join(args, ", ")+") -> "+start+".")
+	for id := 1; id <= g.count; id++ {
+		functions = append(functions, nativeEmitBlock(e, g, get(g.blocks, id).value))
+	}
+	e.nativeFlow = false
+	return join(functions, "\n\n")
+}
+
+func emitLocalScope(e *Emitter, code string) string {
+	if e.nativeFlow || e.leaf {
+		return "(begin " + code + " end)"
+	}
+	return emitScope(code)
+}

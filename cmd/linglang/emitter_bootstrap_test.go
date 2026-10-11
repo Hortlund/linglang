@@ -22,6 +22,9 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 		ropeConstants += fmt.Sprintf("const S%d=S%d+S%d;", i, i-1, i-1)
 	}
 	fixtures := []fixture{
+		{"local_iteration_reuse", iterationStorageFixture(t), "iteration storage ok\n", ""},
+		{"local_iteration_failure", `func main(){for i:=0;i<3;i++{p:=&i;assert(*p==i);if i==2{panic("iteration down")}}}`, "", "iteration down"},
+		{"local_iteration_reused_failure", `func main(){for i:=0;i<3;i++{if i==2{panic("iteration down")}}}`, "", "iteration down"},
 		{"local_constant_rope", ropeConstants + `func observe(s string){println(len(s),slice(s,0,2),slice(s,len(s)-1,len(s)))};func main(){observe(S13+"!")}`, "16385 ab !\n", ""},
 		{"local_multiple_results", multipleResultsFixture, "multiple results ok\n", ""},
 		{"if_initializers", ifInitializerFixture, "if initializers ok\n", ""},
@@ -42,6 +45,22 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 		{"otp_timeout_error", `func main(){receive[int](-2)}`, "", "linglang_invalid_timeout"},
 		{"otp_invalid_pid", `func main(){var p Pid;send(p,1)}`, "", "linglang_invalid_pid"},
 		{"otp_handle_zero", `func main(){var p Pid;var m Monitor;var s Supervisor;var x Process;println(p==nil,m==nil,s==nil,x.pid==nil,x.monitor==nil);d:=head[Pid](nil);println(d.value==nil,d.ok)}`, "true true true true true\ntrue false\n", ""},
+		{"local_mixed_bounded", `func retain(p *int)int{for i:=0;i<1000;i++{n:=i;q:= &n;assert(*q==i)};return *p};func main(){}`, "42\n", ""},
+		{"local_mixed_flow", mixedFlowFixture(t), "", ""},
+		{"local_mixed_failure", `type N struct{x int};func main(){p:= &N{x:7};for i:=0;i<3;i++{assert(p.x==7);if i==2{panic("mixed down")}}}`, "", "mixed down"},
+		{"local_mixed_nil", `type N struct{x int};func main(){var p *N;for i:=0;i<2;i++{println(p.x)}}`, "", "linglang_nil_pointer"},
+		{"local_leaf_scopes", leafScopesFixture(t), "", ""},
+		{"local_leaf_shadowed_entry", `func len(n int)int{p:= &n;return *p};func retain(p *int)int{_=len(1);return *p};func main(){}`, "42\n", ""},
+		{"local_leaf_entry", `func leaf(p *int,q *int)*int{*p,*q=*q,*p;(*p)++;return q};func main(){}`, "leaf entry ok\n", ""},
+		{"local_leaf_failure", `func fail(p *int){(*p)++;panic("leaf down")};func main(){n:=7;fail(&n)}`, "", "leaf down"},
+		{"local_leaf_shadowed_intrinsic", emitterPointerHelpers + `func len(n int)int{_=churn();return n};func use(p *N)int{_=len(1);return p.x};func main(){println(use(node(7)))}`, "7\n", ""},
+		{"local_pointer_parameter_entry_root", `func retain(p *int)int{n:=0;for n<2{n++};return *p};func main(){}`, "42\n", ""},
+		{"local_pointer_parameters", pointerParametersFixture(t), "", ""},
+		{"local_pointer_parameter_failure", emitterPointerHelpers + `func fail(p *N){_=churn();assert(p.x==7);panic("parameter down")};func main(){fail(node(7))}`, "", "parameter down"},
+		{"local_pointer_parameter_nil", `type N struct{x int};func f(p *N){p.x++};func main(){f(nil)}`, "", "linglang_nil_pointer"},
+		{"local_native_control_flow", nativeFlowFixture(t), "", ""},
+		{"local_native_order", `func effect(n int)int{print(n);return n};func main(){a,b:=effect(1),effect(2);a,b=b,a;a+=effect(3);a,a=effect(a+1),effect(a+2);println(a,b);if false&&effect(9)>0{panic("unreachable")};if true||effect(8)>0{println("short")}}`, "123677 1\nshort\n", ""},
+		{"local_native_wide", nativeWideFixture(), "220\n", ""},
 		{"local_versions", `func f(n int,s string,b bool)int{n++;x:=n;n+=x;x*=2;s+="!";b=!b;println(n,x,s,b);return x};func main(){println(f(3,"ok",true))}`, "8 8 ok! false\n8\n", ""},
 		{"local_overflow_and_shift", `func f(n int)int{n++;n--;n<<=2;n>>=1;return n};func main(){n:=9223372036854775807;n++;println(n,f(3));n=-1;n>>=64;println(n);n<<=64;println(n);x:=1;k:=0;x<<=(((1<<63)<<k)>>62);println(x)}`, "-9223372036854775808 6\n-1\n0\n4\n", ""},
 		{"local_address_escape", `func f(n int)*int{p:=&n;n++;return p};func main(){p:=f(3);(*p)++;println(*p)}`, "5\n", ""},
@@ -182,6 +201,12 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					if f.name == "local_pointer_parameter_entry_root" || f.name == "local_leaf_shadowed_entry" || f.name == "local_mixed_bounded" {
+						seed = pointerParameterEntryProbe(seed)
+					}
+					if f.name == "local_leaf_entry" {
+						seed = leafEntryProbe(seed)
+					}
 					seedDir := t.TempDir()
 					if err := build(seedDir, seed); err != nil {
 						t.Fatal(err)
@@ -204,6 +229,12 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 							emitterCleanGC(t, stderr)
 							if f.name == "otp_schema_contract" {
 								assertMessageSchemas(t, seed, module)
+							}
+							if f.name == "local_pointer_parameter_entry_root" || f.name == "local_leaf_shadowed_entry" || f.name == "local_mixed_bounded" {
+								module = pointerParameterEntryProbe(module)
+							}
+							if f.name == "local_leaf_entry" {
+								module = leafEntryProbe(module)
 							}
 							generatedDir := t.TempDir()
 							if err := build(generatedDir, module); err != nil {
@@ -230,6 +261,16 @@ func TestBootstrapEmitterPrograms(t *testing.T) {
 }
 
 const emitterPointerHelpers = `type N struct{x int;next *N};func node(n int)*N{x:=N{x:n};return &x};func churn()int{for i:=0;i<30;i++{_=node(i)};return 5};`
+
+func iterationStorageFixture(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("../../tests/language/iteration_test.lang")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimPrefix(string(data), "package main") + `
+func main(){TestIterationStorage();println("iteration storage ok")}`
+}
 
 const nativeRangeFixture = `func main(){n:=99;for n,n=range (List[int]{4,7}){println(n);n=100};println(n);for n,n=range (List[int]{}){panic("empty")};println(n);for i,v:=range (List[int]{10,20,30}){println(i,v);i=100;v=200;if v==200{continue}}}`
 
@@ -390,4 +431,90 @@ func emitterCleanGC(t *testing.T, stderr string) {
 			t.Fatalf("GC did not finish cleanly (%s):\n%s", value, stderr)
 		}
 	}
+}
+
+func nativeFlowFixture(t *testing.T) string {
+	t.Helper()
+	var source string
+	for _, name := range []string{"iteration_test.lang", "control_flow_test.lang"} {
+		data, err := os.ReadFile(filepath.Join("../../tests/language", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		source += strings.TrimPrefix(string(data), "package main") + "\n"
+	}
+	return source + "func main(){TestNativeControlFlow()}"
+}
+
+func nativeWideFixture() string {
+	var source strings.Builder
+	source.WriteString("func main(){")
+	for i := 0; i < 220; i++ {
+		fmt.Fprintf(&source, "v%d:=1;", i)
+	}
+	source.WriteString("total:=0;for i:=0;i<1;i++{")
+	for i := 0; i < 220; i++ {
+		fmt.Fprintf(&source, "total+=v%d;", i)
+	}
+	source.WriteString("};println(total)}")
+	return source.String()
+}
+
+func pointerParametersFixture(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("../../tests/language/pointer_parameters_test.lang")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimPrefix(string(data), "package main") + "\nfunc main(){TestPointerParameters()}"
+}
+
+// Enter the generated function with a pointer that has no caller-side roots.
+// A language call normally roots arguments as well, which could mask a missing
+// parameter root. Scope exit cannot collect; retain's first safepoint can.
+func pointerParameterEntryProbe(program string) string {
+	return strings.Replace(program, "main() ->", "unused_main() ->", 1) + `
+main() ->
+    P = linglang_rt:scope(fun() -> linglang_rt:new(42, false) end),
+    42 = f_72657461696e(P),
+    #{peak_live_cells := Peak} = linglang_rt:stats(),
+    true = Peak < 32,
+    linglang_rt:collect(),
+    #{live_cells := 0, root_frames := 0, root_entries := 0} = linglang_rt:stats(),
+    io:format("42~n").
+`
+}
+
+func leafScopesFixture(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("../../tests/language/leaf_scopes_test.lang")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimPrefix(string(data), "package main") + "\nfunc main(){TestLeafScopes()}"
+}
+
+// No caller root protects either pointer. A leaf must not collect; a rooted
+// reference helper must install roots before collecting. Stress is enabled by
+// the harness. Check identities, values, and clean handoff after return.
+func leafEntryProbe(program string) string {
+	return strings.Replace(program, "main() ->", "unused_main() ->", 1) + `
+main() ->
+    P = linglang_rt:scope(fun() -> linglang_rt:new(41, false) end),
+    Q = linglang_rt:scope(fun() -> linglang_rt:new(9, false) end),
+    Q = f_6c656166(P, Q),
+    10 = linglang_rt:read(P), 41 = linglang_rt:read(Q),
+    linglang_rt:collect(),
+    #{live_cells := 0, root_frames := 0, root_entries := 0} = linglang_rt:stats(),
+    io:format("leaf entry ok~n").
+`
+}
+
+func mixedFlowFixture(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("../../tests/language/mixed_flow_test.lang")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimPrefix(string(data), "package main") + "\nfunc main(){TestMixedFlow()}"
 }

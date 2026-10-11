@@ -113,11 +113,10 @@ compiler binaries. Follow the [contributor guide](book/src/contributing.md) to
 produce the first archive, then [the self-hosting guide](book/src/self-hosting.md)
 for subsequent builds without Go or the external `erlc` command.
 
-Both drivers provide `check`, `emit`, `run`, `test`, `fmt`, `init`, `describe`, and
-`deps`. The self-hosted driver's `build` produces an executable escript; the Go
+Both drivers provide `check`, `emit`, `run`, `test`, `fmt`, `init`, `describe`,
+`deps`, and `release`. The self-hosted driver's `build` produces an executable escript; the Go
 seed uses `pack` for that output and `build` for a BEAM module directory. The Go
-driver still provides the language server and release packaging. The two
-formatters use different layout conventions; choose one per source tree.
+driver still provides the language server. The two formatters use different layout conventions; choose one per source tree.
 
 ## Tools for developers and agents
 

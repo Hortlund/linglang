@@ -101,6 +101,47 @@ itself requires no Go. Correctness tests have no timing thresholds. Follow the
 [profiling workflow](self-hosting.md#profile-the-compiler-without-go) and keep heavy
 tests separate from uninstrumented performance measurements.
 
+Application benchmarks also accept repeated `-compiler label=archive` arguments.
+Each archive emits every workload with optimized and reference-cell lowering;
+the harness checks deterministic emission and rotates all variants in one VM.
+Archive protocol/failure tests run with `go test ./cmd/bench`. To exercise all
+workloads with a real verified compiler, set `LINGLANG_BENCH_COMPILER` to its
+absolute path and run `go test ./cmd/bench -run '^TestSelfHostedApplicationWorkloads$'`.
+See `benchmarks/README.md` for retained inputs, hashes, and timing boundaries.
+`tests/language/iteration_test.lang` checks loop-cell reuse and observable
+iteration identities under both lowerings and forced GC in the fixed-point proof.
+`tests/language/control_flow_test.lang` covers native nested loops, early returns,
+shadowing, parallel assignment/post statements, fresh zero values, integer
+wrapping/shifts, and allocating callees with rooted callers. The `local_native_*`
+differential fixtures run both emitter builds and both generated lowerings with
+forced GC, including evaluation order and more than 200 live locals. The emitter
+suite checks cell/read/scope elimination and conservative fallback boundaries.
+`pointer_parameters_test.lang` checks rooted native pointer parameters, cycles,
+interior mutation, nil values, recursion, shadowing, escaping parameter addresses,
+and rebinding through assignment, short declaration, branches, and range. The
+`local_pointer_parameter*` differential fixtures also check nil dereference and
+panic cleanup under forced GC. Emitter shape tests require an explicit entry root
+and retain storage cells for rebinding/address-taking, including unreachable code.
+A direct Erlang entry probe passes an otherwise unrooted pointer into generated
+code and forces collection in the callee, so caller argument roots cannot mask a
+missing parameter root. It also requires zero live cells/roots after return.
+`leaf_scopes_test.lang` and the `local_leaf_*` differential fixtures cover aliases,
+interior writes, parallel destinations, branch scopes, early return, overflow,
+allocating callees, shadowed intrinsic names, and panic cleanup. A direct leaf
+entry probe supplies two pointers without caller roots under GC stress: leaves
+must not collect, while reference helpers must root both arguments first. Another
+unrooted entry probe calls an allocating user-defined `len`, requiring the caller
+to retain its parameter root rather than treating the name as an intrinsic. Shape
+tests check scope/keep/safepoint/cell elimination and conservative fallbacks.
+
+`mixed_flow_test.lang` and the `local_mixed_*` differential fixtures check native
+loop edges with stable addressed cells, interior pointers, pointer-bearing
+collections, pointer rebinding, parallel results, nested collecting calls,
+break/continue, returned parameter addresses, nil failures, and panic cleanup.
+The unrooted entry probe additionally bounds peak live cells over 1,000 iterations,
+so stale temporary roots cannot silently accumulate. Shape tests require one
+function scope and only the addressed object's cell in a mixed caller, while
+addressed loop initializers retain their original lowering.
 
 Developer tools are tested by `TestBootstrapCLI/.*/developer_tools` against both
 lowerings under an OTP-only PATH, and by the generation-C proof. Checks cover
@@ -131,3 +172,13 @@ Compiler distributions use the [release workflow](installation.md#maintainer-rel
 `tools/release/smoke.sh` checks a real packaged compiler without Go or `erlc` on
 PATH. Packaging must follow a completed proof, not merely the appearance of its
 output file.
+
+`TestBootstrapCLI/.*/release` exercises self-hosted application releases with
+both compiler and application lowerings. It checks relocated bundles with an
+empty tool PATH, argument/worker behavior, panic exits, file I/O, license parity,
+source/import alias protection, and publication failure. `TestSelfHostedFeatures/release`
+repeats these checks against a verified C archive. `TestReleaseCLI` uses the same
+successful bundle fixtures against the seed; both drivers share OTP packaging.
+The older native catalogue needs `--upgrade-seed` when rebuilding across the
+`releaseProgram` bridge transition. Starter documentation must remain byte-equal
+to the embedded project templates.

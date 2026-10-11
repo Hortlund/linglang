@@ -1,0 +1,83 @@
+package main
+
+type PrimeJob struct {
+	id    int
+	limit int
+}
+
+type PrimeReply struct {
+	id     int
+	count  int
+	worker Pid
+}
+
+func prime(n int) bool {
+	for divisor := 2; divisor*divisor <= n; divisor++ {
+		if n%divisor == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func primeWorker(parent Pid) {
+	for {
+		message := receive[PrimeJob](5000)
+		assert(message.ok)
+		job := message.value
+		if job.id < 0 {
+			return
+		}
+		count := 0
+		for n := 2; n <= job.limit; n++ {
+			if prime(n) {
+				count++
+			}
+		}
+		send(parent, PrimeReply{id: job.id, count: count, worker: self()})
+	}
+}
+
+func expectedPrimes(id int) int {
+	switch id % 4 {
+	case 0:
+		return 168
+	case 1:
+		return 303
+	case 2:
+		return 430
+	}
+	return 550
+}
+
+func main() {
+	var workers List[Process]
+	for id := 0; id < 4; id++ {
+		worker := spawnMonitor(primeWorker, self())
+		workers = prepend(worker, workers)
+		send(worker.pid, PrimeJob{id: id, limit: (id%4 + 1) * 1000})
+	}
+	next := 4
+	total := 0
+	var seen Map[int, bool]
+	for completed := 0; completed < 32; completed++ {
+		message := receive[PrimeReply](5000)
+		assert(message.ok)
+		reply := message.value
+		assert(reply.id >= 0 && reply.id < 32 && !get(seen, reply.id).ok)
+		assert(reply.count == expectedPrimes(reply.id))
+		seen = put(seen, reply.id, true)
+		total += reply.count
+		if next < 32 {
+			send(reply.worker, PrimeJob{id: next, limit: (next%4 + 1) * 1000})
+			next++
+		} else {
+			send(reply.worker, PrimeJob{id: -1})
+		}
+	}
+	for _, worker := range workers {
+		exited := wait(worker.monitor, 5000)
+		assert(exited.ok && exited.normal)
+	}
+	assert(len(seen) == 32 && total == 11608)
+}

@@ -38,5 +38,5 @@ and Go seed support these structured checks and tests. Choose one formatter for
 the project; the self-hosted layout differs from the Go printer.
 
 Use `linglang build -o counter.escript .` with the installed compiler to create an
-OTP-dependent executable. `pack`, `release`, and `lsp` are Go seed commands, not
-installed compiler commands. See README.md for execution and seed differences.
+OTP-dependent executable. Use `linglang release -o counter.tar.gz .` to bundle
+OTP for the current Linux/macOS host. `pack` and `lsp` are Go seed commands. See README.md for execution and seed differences.

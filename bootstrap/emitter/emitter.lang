@@ -9,21 +9,24 @@ type EmitResult struct {
 }
 
 type Emitter struct {
-	checked        CheckResult
-	localKeys      Map[string, string]
-	cells          Map[string, string]
-	valueLocals    Map[string, bool]
-	values         Map[string, string]
-	straight       bool
-	noOpt          bool
-	referenceTypes Map[int, bool]
-	next           int
-	depth          int
-	ret            string
-	loops          List[string]
-	breaks         List[string]
-	reason         string
-	at             Token
+	checked         CheckResult
+	localKeys       Map[string, string]
+	cells           Map[string, string]
+	valueLocals     Map[string, bool]
+	addressedLocals Map[string, bool]
+	values          Map[string, string]
+	nativeFlow      bool
+	leaf            bool
+	straight        bool
+	noOpt           bool
+	referenceTypes  Map[int, bool]
+	next            int
+	depth           int
+	ret             string
+	loops           List[string]
+	breaks          List[string]
+	reason          string
+	at              Token
 }
 
 func emitFail(e *Emitter, at Token, reason string) {
@@ -196,6 +199,7 @@ func emitPackageMode(files List[SyntaxNode], noOpt bool, testing bool) EmitResul
 }
 
 func emitFunction(e *Emitter, node SyntaxNode) string {
+	e.leaf = false
 	emitAnalyzeLocals(e, node)
 	name := childAt(node, 0)
 	if name.text == "init" || name.text == "_" {
@@ -208,6 +212,11 @@ func emitFunction(e *Emitter, node SyntaxNode) string {
 	if signature.result != tVoid && !emitTerminates(e, childAt(node, 3)) {
 		emitFail(e, name.at, "missing return")
 	}
+	flow := NativeFlow{name: emitFunctionName(name.text)}
+	if nativeEligible(e, node, &flow) {
+		return emitNativeFunction(e, node, &flow)
+	}
+	e.leaf = emitLeafEligible(e, node)
 	var args List[string]
 	var setup List[string]
 	for _, field := range childAt(node, 1).children {
@@ -232,7 +241,9 @@ func emitFunction(e *Emitter, node SyntaxNode) string {
 	value := emitFresh(e)
 	body := emitBlock(e, childAt(node, 3))
 	setup = append(setup, "try "+body+" catch throw:{linglang_return, "+e.ret+", "+value+"} -> "+value+" end")
-	return emitFunctionName(name.text) + "(" + join(args, ", ") + ") ->\n    " + emitScope(join(setup, ",\n    ")) + "."
+	code := emitFunctionName(name.text) + "(" + join(args, ", ") + ") ->\n    " + emitLocalScope(e, join(setup, ",\n    ")) + "."
+	e.leaf = false
+	return code
 }
 
 // Conservative flow checking for the supported subset. Unsupported statements

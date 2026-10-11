@@ -4,7 +4,9 @@ func emitBlock(e *Emitter, node SyntaxNode) string {
 	values := e.values
 	var parts List[string]
 	for _, statement := range node.children {
-		parts = append(parts, "linglang_rt:safepoint()")
+		if !e.leaf {
+			parts = append(parts, "linglang_rt:safepoint()")
+		}
 		parts = append(parts, emitStatement(e, statement))
 	}
 	parts = append(parts, "ok")
@@ -14,7 +16,7 @@ func emitBlock(e *Emitter, node SyntaxNode) string {
 	// The generated scope is a closure. Its declarations dominate reads inside
 	// that closure, but must not become available to sibling or outer scopes.
 	e.values = values
-	return emitScope(join(parts, ",\n        "))
+	return emitLocalScope(e, join(parts, ",\n        "))
 }
 
 func emitVariables(e *Emitter, node SyntaxNode) string {
@@ -64,12 +66,12 @@ func emitAssignment(e *Emitter, node SyntaxNode) string {
 	target := head(lhs).value
 	value := emitExpression(e, head(rhs).value, false)
 	if target.kind == "Ident" && target.text == "_" {
-		return emitScope(value)
+		return emitLocalScope(e, value)
 	}
 	if node.text == ":=" {
 		id := emitDefinition(e, target).typeID
 		emitRequireType(e, id, target.at)
-		return emitDeclareLocal(e, target, emitScope(value))
+		return emitDeclareLocal(e, target, emitLocalScope(e, value))
 	}
 	key := emitLocalKey(e, target)
 	if get(e.valueLocals, key).value {
@@ -80,13 +82,13 @@ func emitAssignment(e *Emitter, node SyntaxNode) string {
 			}
 			value = emitOrdered(e, List[string]{get(e.values, key).value, value}, List[int]{emitValue(e, target).typeID, emitValue(e, head(rhs).value).typeID}, "fun(A, B) -> linglang_rt:binary("+emitOperator(op)+", A, B) end")
 		}
-		return emitAssignValue(e, key, emitScope(value))
+		return emitAssignValue(e, key, emitLocalScope(e, value))
 	}
 	// Evaluate and root the destination before the RHS can overwrite its last
 	// alias or collect. Read a compound-assignment value before evaluating RHS.
 	address := emitAddress(e, target)
 	cell := emitFresh(e)
-	setup := cell + " = " + address + ", linglang_rt:keep(" + cell + "), "
+	setup := cell + " = " + address + ", " + emitHold(e, cell) + ", "
 	if node.text != "=" {
 		op := slice(node.text, 0, len(node.text)-1)
 		if op == "<<" || op == ">>" {
@@ -94,7 +96,7 @@ func emitAssignment(e *Emitter, node SyntaxNode) string {
 		}
 		value = emitOrdered(e, List[string]{"linglang_rt:read(" + cell + ")", value}, List[int]{emitValue(e, target).typeID, emitValue(e, head(rhs).value).typeID}, "fun(A, B) -> linglang_rt:binary("+emitOperator(op)+", A, B) end")
 	}
-	return emitScope(setup + "linglang_rt:write(" + cell + ", " + value + ")")
+	return emitLocalScope(e, setup+"linglang_rt:write("+cell+", "+value+")")
 }
 
 func emitFor(e *Emitter, node SyntaxNode) string {
@@ -106,7 +108,10 @@ func emitFor(e *Emitter, node SyntaxNode) string {
 	if initializer.kind == "AssignStmt" && initializer.text == ":=" {
 		for _, name := range childAt(initializer, 0).children {
 			key := sourceIdentity(name.at)
-			if name.text != "_" && !get(e.valueLocals, key).value {
+			// Fresh iteration identity is observable only through an address.
+			// Unaddressed bindings reuse their rooted cell; addressed bindings
+			// still clone before post, including in mixed multi-initializers.
+			if name.text != "_" && !get(e.valueLocals, key).value && (e.noOpt || get(e.addressedLocals, key).value) {
 				initials = append(initials, emitCell(e, name, true))
 				iteration := emitFresh(e)
 				iterations = append(iterations, iteration)
@@ -133,9 +138,9 @@ func emitFor(e *Emitter, node SyntaxNode) string {
 			old = tail(old)
 		}
 		pattern := "[" + join(iterations, ", ") + "]"
-		return emitScope(init + ", " + loop + " = make_ref(), linglang_rt:loop_cells(fun(" + pattern + ") -> " + condition + " end, fun(" + pattern + ") -> " + body + " end, fun(" + pattern + ") -> " + post + " end, " + loop + ", [" + join(initials, ", ") + "])")
+		return emitLocalScope(e, init+", "+loop+" = make_ref(), linglang_rt:loop_cells(fun("+pattern+") -> "+condition+" end, fun("+pattern+") -> "+body+" end, fun("+pattern+") -> "+post+" end, "+loop+", ["+join(initials, ", ")+"])")
 	}
-	return emitScope(init + ", " + loop + " = make_ref(), linglang_rt:loop(fun() -> " + condition + " end, fun() -> " + body + " end, fun() -> " + post + " end, " + loop + ")")
+	return emitLocalScope(e, init+", "+loop+" = make_ref(), linglang_rt:loop(fun() -> "+condition+" end, fun() -> "+body+" end, fun() -> "+post+" end, "+loop+")")
 }
 
 func emitStatement(e *Emitter, node SyntaxNode) string {
@@ -168,10 +173,10 @@ func emitStatement(e *Emitter, node SyntaxNode) string {
 	case "AssignStmt":
 		return emitAssignment(e, node)
 	case "ExprStmt":
-		return emitScope(emitExpression(e, childAt(node, 0), false))
+		return emitLocalScope(e, emitExpression(e, childAt(node, 0), false))
 	case "ReturnStmt":
 		value := emitResults(e, node.children)
-		return emitScope("throw({linglang_return, " + e.ret + ", " + value + "})")
+		return emitLocalScope(e, "throw({linglang_return, "+e.ret+", "+value+"})")
 	case "IncDecStmt":
 		target := childAt(node, 0)
 		op := "add"
@@ -183,11 +188,11 @@ func emitStatement(e *Emitter, node SyntaxNode) string {
 			return emitAssignValue(e, key, "linglang_rt:binary("+op+", "+get(e.values, key).value+", 1)")
 		}
 		cell := emitFresh(e)
-		return emitScope(cell + " = " + emitAddress(e, target) + ", linglang_rt:keep(" + cell + "), linglang_rt:write(" + cell + ", linglang_rt:binary(" + op + ", linglang_rt:read(" + cell + "), 1))")
+		return emitLocalScope(e, cell+" = "+emitAddress(e, target)+", "+emitHold(e, cell)+", linglang_rt:write("+cell+", linglang_rt:binary("+op+", linglang_rt:read("+cell+"), 1))")
 	case "IfStmt":
 		values := e.values
 		init := emitStatement(e, childAt(node, 0))
-		condition := emitScope(emitExpression(e, childAt(node, 1), false))
+		condition := emitLocalScope(e, emitExpression(e, childAt(node, 1), false))
 		body := emitStatement(e, childAt(node, 2))
 		other := emitStatement(e, childAt(node, 3))
 		e.values = values
@@ -196,7 +201,7 @@ func emitStatement(e *Emitter, node SyntaxNode) string {
 			// The initializer owns one lexical scope shared by the condition
 			// and both branches, including an else-if. Escaping pointers are
 			// retained by the outer roots when this scope unwinds.
-			return emitScope(init + ", " + branch)
+			return emitLocalScope(e, init+", "+branch)
 		}
 		return branch
 	}

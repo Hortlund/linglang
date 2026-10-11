@@ -73,9 +73,18 @@ func emitNew(e *Emitter, id int, value string) string {
 
 func emitKeep(e *Emitter, id int, value string) string {
 	if emitReferences(e, id) {
-		return "linglang_rt:keep(" + value + ")"
+		return emitHold(e, value)
 	}
 	return value
+}
+
+// A proven leaf cannot allocate or collect managed cells. Its native terms
+// remain on the BEAM stack, and no temporary managed root frame is needed.
+func emitHold(e *Emitter, value string) string {
+	if e.leaf {
+		return value
+	}
+	return "linglang_rt:keep(" + value + ")"
 }
 
 func emitArgumentTypes(e *Emitter, node SyntaxNode) List[int] {

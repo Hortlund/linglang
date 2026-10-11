@@ -53,6 +53,7 @@ func TestBootstrapCLI(t *testing.T) {
 			}
 			t.Run("developer_tools", func(t *testing.T) { testBootstrapDeveloperTools(t, cli, env) })
 			t.Run("discovery", func(t *testing.T) { testBootstrapDiscovery(t, cli, env) })
+			t.Run("release", func(t *testing.T) { testBootstrapRelease(t, cli, env) })
 			t.Run("structured_tooling", func(t *testing.T) { testStructuredDriver(t, cli, env, "bootstrap") })
 			t.Run("typed_io", func(t *testing.T) { testBootstrapIO(t, cli, env) })
 			t.Run("modules", func(t *testing.T) { testBootstrapModules(t, cli, env) })

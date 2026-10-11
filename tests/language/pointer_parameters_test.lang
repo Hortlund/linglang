@@ -1,0 +1,98 @@
+package main
+
+type ParameterNode struct {
+	value int
+	next  *ParameterNode
+}
+
+func parameterNode(n int) *ParameterNode { return &ParameterNode{value: n} }
+func parameterChurn() {
+	for i := 0; i < 40; i++ {
+		p := parameterNode(i)
+		assert(p.value == i)
+	}
+}
+
+func parameterRetain(p *ParameterNode, owner **ParameterNode) *ParameterNode {
+	*owner = nil
+	parameterChurn()
+	assert(p.next == p)
+	for i := 0; i < 3; i++ {
+		p.value++
+		parameterChurn()
+	}
+	return p
+}
+func parameterInterior(p *int)                          { parameterChurn(); *p += 3 }
+func parameterNil(p *ParameterNode) bool                { parameterChurn(); return p == nil }
+func parameterAddress(p *ParameterNode) **ParameterNode { return &p }
+func parameterRebind(p *ParameterNode, q *ParameterNode) *ParameterNode {
+	p = q
+	parameterChurn()
+	return p
+}
+func parameterShort(p *ParameterNode, q *ParameterNode) *ParameterNode {
+	p, n := q, 1
+	assert(n == 1)
+	parameterChurn()
+	return p
+}
+func parameterSwap(p *ParameterNode, q *ParameterNode) *ParameterNode {
+	p, q = q, p
+	parameterChurn()
+	return p
+}
+func parameterLoop(p *ParameterNode, q *ParameterNode) *ParameterNode {
+	for i := 0; i < 2; i++ {
+		if i == 1 {
+			p = q
+		}
+		parameterChurn()
+	}
+	return p
+}
+func parameterRange(p *ParameterNode, q *ParameterNode) *ParameterNode {
+	for _, p = range (List[*ParameterNode]{q}) {
+		parameterChurn()
+	}
+	return p
+}
+func parameterShadow(p *ParameterNode) int {
+	{
+		p := 7
+		q := &p
+		*q++
+		assert(p == 8)
+	}
+	parameterChurn()
+	return p.value
+}
+func parameterRecursive(p *ParameterNode, n int) *ParameterNode {
+	parameterChurn()
+	if n == 0 {
+		return p
+	}
+	return parameterRecursive(p, n-1)
+}
+
+func TestPointerParameters() {
+	p := parameterNode(7)
+	p.next = p
+	owner := p
+	q := parameterRetain(p, &owner)
+	assert(owner == nil && q == p && p.value == 10 && p.next == p)
+	parameterInterior(&p.value)
+	assert(p.value == 13 && parameterShadow(p) == 13)
+	assert(parameterRecursive(p, 4) == p)
+	assert(parameterNil(nil) && !parameterNil(p))
+	a := parameterAddress(p)
+	b := parameterAddress(p)
+	assert(a != b && *a == p && *b == p)
+	other := parameterNode(20)
+	*a = other
+	parameterChurn()
+	assert(*a == other && *b == p && p.value == 13)
+	assert(parameterRebind(p, other) == other && p.value == 13)
+	assert(parameterShort(p, other) == other && parameterSwap(p, other) == other)
+	assert(parameterLoop(p, other) == other && parameterRange(p, other) == other)
+}

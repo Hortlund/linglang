@@ -48,6 +48,19 @@ BEAM files. It contains no Linglang parsing, checking, or lowering. The language
 compiler and acceptance tests execute as Linglang programs throughout. Neither Go
 nor the external `erlc` executable is required by this workflow.
 
+When changing the emitter's lowering, an older compiler can emit different
+Erlang than the updated implementation. First build a temporary compiler from
+the current sources, then use it as the seed for the full proof:
+
+```sh
+bin/linglang-selfhost build -o _build/updated-seed bootstrap/emitter
+escript tools/bootstrap.escript --seed _build/updated-seed --output bin/linglang-next
+```
+
+The temporary compiler contains the updated implementation but is not yet a
+verified fixed point. Only the successful proof and acceptance suites verify
+the published generation. Preserve the original trusted archive throughout.
+
 Each stage has a 900-second default deadline. A separate parent-lifetime pipe
 terminates the child VM if the build driver exits or times out, including when
 compiler code is looping without reading stdin. Temporary build files are removed
@@ -75,9 +88,9 @@ Keep a trusted compiler artifact to continue rebuilding without Go. A reproducib
 source bootstrap is not a proof of compiler provenance or freedom from inherited
 compiler defects. The Go seed remains useful as an independent semantic oracle.
 
-The Go driver still owns `lsp` and `release`.
-The self-hosted driver owns `check`, `emit`, `build`, `run`, `test`, `fmt`, `init`, `describe`, and `deps`.
-An application edit/format/check/test/build loop now needs only the compiler
+The Go driver still owns `lsp`.
+The self-hosted driver owns `check`, `emit`, `build`, `release`, `run`, `test`, `fmt`, `init`, `describe`, and `deps`.
+An application edit/format/check/test/build/release loop now needs only the compiler
 archive and OTP. See [developer tools](developer-tools.md) for formatter differences. Moving the
 remaining developer commands is future work; use the capability matrix when
 choosing a workflow. SQLite also has an optional C helper. Erlang/OTP remains the
@@ -132,9 +145,35 @@ escript tools/bootstrap.escript --upgrade-seed \
 ```
 
 This first builds a temporary compiler with the new checker/emitter definitions
-and compatibility stubs for `fmt`, `init`, and `deps`. The temporary compiler then builds
+and compatibility stubs for `fmt`, `init`, `deps`, and `release`. The temporary compiler then builds
 the complete current compiler. B/C equality and the same real language suites
 are still required before publication. The published artifact contains the actual
 tools. No Go is involved. After upgrading, normal rebuilds need no upgrade flag.
 This bridge covers this native-API transition, not arbitrary historical language
 versions. Keep the old seed until the new artifact has passed its acceptance tests.
+
+## Bundle an application with OTP
+
+```sh
+bin/linglang-selfhost release --gc-stress -o counter.tar.gz examples/webcounter
+```
+
+The self-hosted driver loads, checks, and emits the application in Linglang. Its
+`releaseProgram` bridge uses OTP compiler/systools APIs in the current VM, without
+Go, an external `erlc`, or a packaging child process. Both drivers share the
+release layout and relocatable launcher. Extract the archive and run `bin/run`;
+the bundled ERTS needs no OTP installation or tools on `PATH`. Arguments and stdin
+are inherited, and relative data paths use the caller's working directory.
+
+`release` supports `--no-opt`, `--gc-stress`, `--gc-stats`, and `-o`. The bootstrap
+default is `program.tar.gz`; the seed retains its source/platform-derived name.
+It targets the running OTP installation's Linux/macOS OS and architecture, not a
+cross-compilation target. The archive includes kernel/stdlib, the application,
+shared runtime modules, and OTP's license. SQLite's optional native helper,
+application data, and additional OTP development applications are not bundled.
+
+Publication uses a complete temporary file beside the destination and atomic
+rename. Compilation/packaging failure leaves an old archive intact. Root and
+imported source files, including hardlink/symlink aliases, cannot be overwritten.
+Handled errors remove staging files; abrupt process termination may leave a
+staging directory or temporary file. Packaging has no built-in deadline.

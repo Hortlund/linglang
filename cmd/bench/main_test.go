@@ -43,6 +43,7 @@ func TestInvalidConfig(t *testing.T) {
 		{samples: 1},
 		{samples: 1, workloads: []string{"unknown"}},
 		{samples: 1, workloads: []string{"arithmetic", "arithmetic"}},
+		{samples: 1, workloads: workloads, compilers: compilerFlags{{Label: "bad-label", Path: "compiler"}}},
 	} {
 		if _, err := runBench(cfg, io.Discard); err == nil {
 			t.Fatalf("accepted invalid config: %+v", cfg)

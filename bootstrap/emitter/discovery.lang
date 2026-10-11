@@ -23,6 +23,7 @@ func bootstrapCommands() List[ToolCommand] {
 		ToolCommand{name: "deps", usage: "deps [--check] [--json] [file.lang|directory]", summary: "Record or verify local dependency source hashes; no fetching or execution."},
 		ToolCommand{name: "check", usage: "check [--json] [--tests] [--no-opt] <file.lang|directory>", summary: "Validate supported source through lowering without running it."},
 		ToolCommand{name: "emit", usage: "emit [--no-opt] <file.lang|directory>...", summary: "Print Erlang source."},
+		ToolCommand{name: "release", usage: "release [--no-opt] [--gc-stress] [--gc-stats] [-o archive.tar.gz] <file.lang|directory>...", summary: "Bundle the current OTP runtime for Linux/macOS; defaults to program.tar.gz."},
 		ToolCommand{name: "build", usage: "build [--no-opt] [--gc-stress] [--gc-stats] [-o executable] <file.lang|directory>...", summary: "Package an executable that requires OTP."},
 		ToolCommand{name: "run", usage: "run [--no-opt] [--gc-stress] [--gc-stats] <file.lang|directory>... [-- args...]", summary: "Compile and execute a program with OTP."},
 		ToolCommand{name: "test", usage: "test [--json] [--no-opt] [--gc-stress] [--gc-stats] [--timeout 30s] [file_test.lang|directory]", summary: "Run root Test functions in isolated VMs with per-test deadlines."},
@@ -41,7 +42,7 @@ func bootstrapCapabilities() List[ToolCapability] {
 		ToolCapability{name: "http", status: "limited", notes: "Checkout source library stdlib/http has bounded single-request HTTP/1.1 support; no TLS or request bodies. Not embedded in this compiler."},
 		ToolCapability{name: "remote-packages", status: "unavailable", notes: "No registry, fetching, version solver or install hooks."},
 		ToolCapability{name: "user-generics", status: "unavailable", notes: "Generic native operations exist; user-defined generic declarations are unsupported."},
-		ToolCapability{name: "self-hosted-tooling", status: "limited", notes: "check/emit/build/run/test/fmt/init/describe/deps run on OTP without Go. lsp and release remain Go-driver commands."},
+		ToolCapability{name: "self-hosted-tooling", status: "limited", notes: "check/emit/build/release/run/test/fmt/init/describe/deps run on OTP without Go. lsp remains a Go-driver command."},
 		ToolCapability{name: "language-subset", status: "limited", notes: "The bootstrap supports fewer literal/allocation forms than the seed. Interfaces and general Go packages are unsupported. Multiple results and simultaneous assignment are supported."},
 	}
 }

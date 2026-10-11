@@ -26,7 +26,7 @@ func main() {
 func measure(name string, samples, warmup int) error {
 	runs := map[string]func(){
 		"arithmetic": arithmetic, "calls": calls, "structs": structs, "pointers": pointers,
-		"lists": lists, "maps": maps, "strings": text, "messages": messages,
+		"lists": lists, "maps": maps, "strings": text, "messages": messages, "prime_jobs": primeJobs,
 	}
 	run, ok := runs[name]
 	if !ok || samples < 1 || samples > 100 || warmup < 0 || warmup > 100 {
@@ -192,4 +192,62 @@ func messages() {
 	}
 	<-done
 	check(total == 49995000)
+}
+
+func primeJobs() {
+	type job struct{ id, limit int64 }
+	type reply struct {
+		id, count int64
+		worker    int
+	}
+	var workers [4]chan job
+	replies := make(chan reply, 4)
+	done := make(chan struct{}, 4)
+	for worker := range workers {
+		requests := make(chan job, 1)
+		workers[worker] = requests
+		go func(worker int) {
+			defer func() { done <- struct{}{} }()
+			for request := range requests {
+				var count int64
+				for n := int64(2); n <= request.limit; n++ {
+					if prime(n) {
+						count++
+					}
+				}
+				replies <- reply{request.id, count, worker}
+			}
+		}(worker)
+		id := int64(worker)
+		requests <- job{id, (id%4 + 1) * 1000}
+	}
+	seen := make(map[int64]bool)
+	next := int64(4)
+	var total int64
+	for completed := 0; completed < 32; completed++ {
+		result := <-replies
+		check(result.id >= 0 && result.id < 32 && !seen[result.id])
+		check(result.count == [4]int64{168, 303, 430, 550}[result.id%4])
+		seen[result.id] = true
+		total += result.count
+		if next < 32 {
+			workers[result.worker] <- job{next, (next%4 + 1) * 1000}
+			next++
+		} else {
+			close(workers[result.worker])
+		}
+	}
+	for range workers {
+		<-done
+	}
+	check(len(seen) == 32 && total == 11608)
+}
+
+func prime(n int64) bool {
+	for divisor := int64(2); divisor*divisor <= n; divisor++ {
+		if n%divisor == 0 {
+			return false
+		}
+	}
+	return true
 }

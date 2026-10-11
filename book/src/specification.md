@@ -97,6 +97,20 @@ fields are comparable. Lists and maps cannot be compared to each other, but can
 be compared with `nil`. Pointers compare storage identity, not pointee values.
 Strings compare byte contents. String `+` concatenates bytes.
 
+A pointer argument copies the pointer value: pointee mutation is visible through
+aliases, while rebinding the parameter leaves the caller's binding unchanged.
+`&parameter` refers to distinct local parameter storage, which may escape the
+call. Optimized bootstrap output may omit that storage cell when the pointer
+parameter is never rebound or addressed. In eligible native loop functions,
+unaddressed bindings may also be rebound as native values; each block roots its
+live pointer-bearing values before any safepoint. Addressed locals retain stable
+cells, and addressed loop initializers retain fresh per-iteration identity.
+The compiler roots live pointers unless
+the complete helper is proven unable to allocate or collect managed cells; such
+leaf helpers may omit roots and safepoints. Both paths preserve pointee identity,
+interior pointers, nil failures, evaluation order, and GC safety. BEAM's own term
+allocation and garbage collection are separate from managed-cell collection.
+
 ## Declarations, statements, and scope
 
 Local variables use `var name Type [= expression]` or `name := expression`.
@@ -131,6 +145,15 @@ A returned or otherwise escaped pointer to initializer storage remains valid.
 `for` supports condition-only, infinite, and initializer/condition/post forms.
 Each variable introduced by a `for` initializer has fresh storage per iteration,
 including multiple bindings; the next iteration's storage is created before the post statement.
+Optimized lowering may reuse physical storage when the binding's address is
+never taken. This preserves values, evaluation order, and observable pointer
+identity; an addressed binding still gets fresh iteration storage, even when
+other bindings in the same initializer reuse cells.
+In primitive-only functions, optimized bootstrap lowering may eliminate cells
+entirely and carry values through native tail calls. This also preserves nested
+control flow, short-circuit evaluation, assignment order, integer overflow, and
+failure behavior. Address-taking and unsupported optimization shapes retain the
+reference control-flow machinery; they remain supported language constructs.
 List range evaluates its source once. Variables declared by range have fresh
 identity per iteration; assignment-form range updates existing identifiers.
 `switch` supports an optional initializer, optional tag, multiple case values,
@@ -217,6 +240,16 @@ floats, text, and blobs; floats are decimal text because Linglang has no runtime
 float type. NULL is distinct from empty text. Multi-call transactions and
 persistent `:memory:` connections are not supported. A failure or timeout does
 not establish whether a write committed; callers must not retry blindly.
+
+## Application release packaging
+
+Both drivers support `release` for the build host on Linux/macOS. The self-hosted
+driver defaults to `program.tar.gz` and supports `-o`, `--no-opt`, `--gc-stress`,
+and `--gc-stats`. Packaging runs no application code. Complete archives replace
+the output atomically; failures preserve existing output, and root/imported
+source aliases are protected. Bundles contain OTP and preserve program arguments,
+stdin, and working-directory-relative I/O. Native helpers and application data
+remain external. See [self-hosting](self-hosting.md#bundle-an-application-with-otp).
 
 ## Implementation limits
 
